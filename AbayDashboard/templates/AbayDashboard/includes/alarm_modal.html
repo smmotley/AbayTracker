@@ -1,0 +1,154 @@
+<!-- Button trigger modal -->
+{% load bootstrap4 %}
+{% load static %}
+<!-- Compiled and minified CSS
+    <link href="{% static "/css/base.css" %}" rel="stylesheet"> -->
+    <!-- My CSS changes -->
+    <link href="{% static "/css/style.css" %}" rel="stylesheet">
+ <!-- jQuery-->
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/jquery/3.4.1/jquery.min.js'></script>
+
+ <!-- BOOTSTRAP CSS and JS-->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css" integrity="sha384-Gn5384xqQ1aoWXA+058RXPxPg6fy4IWvTNh0E263XmFcJlSAwiGgFAW/dAiS6JXm" crossorigin="anonymous">
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/js/bootstrap.min.js" integrity="sha384-JZR6Spejh4U02d8jOt6vLEHfe/JQGiRRSQQxSfFWpi1MquVdAyjUar5+76PVCmYl" crossorigin="anonymous"></script>
+
+<!-- Modal -->
+<div class="modal fade show" id="myModal" role="dialog" tabindex="-1">
+    <div id="alarm_modal_django" class="modal-dialog modal-dialog-centered" role="document">
+        <div class="modal-content" id="alarm_modal_content_django">
+            <div class="modal-header">
+                <h5 class="modal-title" id="modalTitle">Alarm Preferences</h5>
+            </div>
+            <div id="modal-body" class="modal-body">
+                <div class="div-for-dropdown" id="alert_type">
+                    <label for="alarmtype">Alarm Type</label>
+                    <select class="form-control" name="select1" id="select1">
+                        <option value="" selected disabled>Please Select</option>
+                        <option value="1">Flow</option>
+                        <option value="2">Generation</option>
+                        <option value="3">Abay Management</option>
+                        <option value="4">Rafting Requirements</option>
+                    </select>
+                </div>
+                <div class="div-for-dropdown" id="alert_id" style="display: none">
+                    <label for="Inputselect">Select Region</label>
+                    <select class="form-control" name="select2" id="select2">
+                        <option value="1">Please Select</option>
+                        <option value="1" id="R4">R4</option>
+                        <option value="1" id="R11">R11</option>
+                        <option value="1" id="R20">R20</option>
+                        <option value="1" id="R30">R30</option>
+                        <option value="2" >Please Select</option>
+                        <option value="2">Oxbow</option>
+                        <option value="2">Ralston</option>
+                        <option value="2">Middle Fork</option>
+                        <option value="2">French Meadows</option>
+                        <option value="2">Hell Hole</option>
+                        <option value="3" >Please Select</option>
+                        <option value="3">Abay Levels</option>
+                        <option value="4" >Please Select</option>
+                        <option value="4">Rafting Start / Stop Times<option>
+                    </select>
+                </div>
+            <hr>
+                <div class="alarm_input" id="alarm_input">
+                    <form method = "POST">
+                    <div id="alarm_wrapper" class="row">
+                        {%  csrf_token %}
+                        {% for alarm in alarm_preferences %}
+                            <div class="alarm_user_input col-6" style="display: none">
+                                <input class="form-control" name="{{ alarm.name }}" id="{{ alarm.name }}" type="text" value="{{user_alert_data.fields|get_item:alarm.name  | default_if_none:""}}">
+                            </div>
+                        {% endfor %}
+                    </div>
+                    <div class="alarm_notes" style="display:none"></div>
+                    <div loading_state="[object Object]" class="modal-footer">
+                        <button class="btn btn-primary" id="alarmSubmit" style="display: none" type="submit">Submit Changes</button>
+                        <button id="close" class="ml-auto btn btn-secondary">Close</button>
+                    </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+ <button id="open_alert" class="ml-auto btn btn-secondary">OPEN</button>
+
+<script>
+    var $select1 = $( '#select1' ),
+		$select2 = $( '#select2' ),
+        $options = $select2.find( 'option' );
+        $alarm_input = $('#alarm_input')
+
+        $select1.on('change', function() {
+            $('#alert_id').prop("style", "display: block")
+            $select2.html( $options.filter( '[value="' + this.value + '"]' ) );
+        } ).trigger( 'change' );
+
+        $select2.on( 'change', function() {
+            var new_html = alert_html($select2.find('option:selected').text())
+            //$alarm_input.html(new_html)
+        } ).trigger( 'change' );
+
+    $('#open_alert').click(function(){
+        console.log("CLICKED")
+        $('#myModal').modal('toggle');
+    });
+
+    function alert_html(alarmVariable){
+        $(".alert_label").remove()
+        $(".alarm_user_input").prop("style", "display: none")
+         var $r4 = $("#r4_hi, #r4_lo"),
+             $r11 = $("#r11_hi, #r11_lo"),
+             $r20 = $("#r20_hi, #r20_lo"),
+             $r30 = $("#r30_hi, #r30_lo"),
+            $abay = $("#afterbay_hi, #afterbay_lo")
+            $alarm_notes=$(".alarm_notes")
+
+        $alarm_notes.prop("style", "display: none")
+        /*
+        $r4.prop("style", "display: none")
+        $r11.prop("style", "display: none")
+        $r20.prop("style", "display: none")
+        $r30.prop("style", "display: none")
+        $abay.prop("style", "display: none")*/
+        $("#alarmSubmit").prop("style", "display: block")
+
+        if (alarmVariable === "R4"){
+            $("#r4_lo").parent().append('<strong><label for="r4_lo" class="alert_label">R4 Lower Limit</label></strong>')
+            $("#r4_hi").parent().append('<strong><label for="r4_hi" class="alert_label">R4 Upper Limit</label></strong>')
+            $r4.parent().prop("style", "display: block")
+            $alarm_notes.html('<hr>alarm notes go here')
+            $alarm_notes.prop("style", "display: block")
+        }
+        if (alarmVariable === "R11"){
+            $("#r11_lo").parent().append('<strong><label for="r11_lo" class="alert_label">R11 Lower Limit</label></strong>')
+            $("#r11_hi").parent().append('<strong><label for="r11_hi" class="alert_label">R11 Upper Limit</label></strong>')
+            $r11.parent().prop("style", "display: block")
+        }
+        if (alarmVariable === "R20"){
+            $("#r20_lo").parent().append('<strong><label for="r20_lo" class="alert_label">R20 Lower Limit</label></strong>')
+            $("#r20_hi").parent().append('<strong><label for="r20_hi" class="alert_label">R20 Upper Limit</label></strong>')
+            $r20.parent().prop("style", "display: block")
+        }
+        if (alarmVariable === "R30"){
+            $("#r30_lo").parent().append('<strong><label for="r30_lo" class="alert_label">R30 Lower Limit</label></strong>')
+            $("#r30_hi").parent().append('<strong><label for="r30_hi" class="alert_label">R30 Upper Limit</label></strong>')
+            $r30.parent().prop("style", "display: block")
+        }
+        if (alarmVariable === "Abay Levels"){
+            $("#afterbay_lo").parent().append('<strong><label for="afterbay_lo" class="alert_label">Lower Limit</label></strong>')
+            $("#afterbay_hi").parent().append('<strong><label for="afterbay_hi" class="alert_label">Upper Limit</label></strong>')
+            $abay.parent().prop("style", "display: block")
+        }
+    }
+
+    $('#form').submit(function(e){
+    $.post('/url/', $(this).serialize(), function(data){
+       $('.message').html(data.message);
+       // of course you can do something more fancy with your respone
+    });
+    e.preventDefault();
+});
+</script>
