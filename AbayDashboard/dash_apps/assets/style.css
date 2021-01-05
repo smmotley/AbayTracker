@@ -213,3 +213,46 @@ a {
 .loading_wrapper > div {
     visibility: visible !important;
 }
+
+.top-cards .card-body .row {
+    height: 8rem;
+}
+
+.col{
+    flex-grow: 1;
+    max-width: 100%;
+}
+
+.col-auto {
+    -webkit-box-flex: 0;
+    -ms-flex: 0 0 auto;
+    flex: 0 0 auto;
+    width: auto;
+    max-width: 100%;
+}
+
+/* This is for the label below the gauge */
+.jjZFEi{
+    top: 50px !important;
+}
+
+.daq-gauge--light{
+    color: #9da9bb !important;
+}
+
+/* TANK */
+/* This if for the text in the tank */
+.gQmwTq{
+    font-size: 1.5vw !important;
+}
+/* This if for the tick labels (y-axis) of the tank
+    For now, we're turning it off*/
+.daq-tank--light__tick{
+    color: #9da9bb !important;
+    display: none !important
+}
+
+.daq-tank--light__container{
+    width: 100% !important;
+}
+/* END TANK */
