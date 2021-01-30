@@ -2,6 +2,8 @@ from django import forms
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import User
 from AbayDashboard.models import Profile, AlertPrefs
+from django.core.exceptions import ValidationError
+from django.core.validators import RegexValidator
 from phonenumber_field.modelfields import PhoneNumberField
 
 class NewUserForm(UserCreationForm):
@@ -39,19 +41,39 @@ class NewUserForm(UserCreationForm):
 class UserProfileForm(forms.ModelForm):
     error_messages =  {'Incorrect Format': ('Value outside of bounds.')}
 
-    alert_sTime = forms.TimeField(label="Alerts OK After", required=False,
+    alert_ok_time_start = forms.TimeField(label="Start Time", required=False,
                                  widget=forms.TextInput(attrs={'placeholder': 'Alert Start Time',
-                                                               'class':'timepicker'}))
-    alert_eTime = forms.FloatField(label="Stop Alerts After", required=False,
+                                                               'class':'form-control datetimepicker-input',
+                                                               'data-target':'#alert_ok_time_start'}))
+    alert_ok_time_end = forms.TimeField(label="End Time", required=False,
                                 widget=forms.TextInput(attrs={'placeholder': 'Alert End Time',
-                                                       'class':'timepicker'}))
-    alert = forms.BooleanField(label="Turn Alerts On", required=False,
-                                widget=forms.TextInput(attrs={'placeholder': 'Alerts On?',
-                                                              'type':'checkbox'}))
+                                                       'class':'form-control datetimepicker-input',
+                                                              'data-target':'#alert_ok_time_end'}))
+    phone_number = forms.CharField(required=False,
+                                   validators=[
+                                        RegexValidator(
+                                            regex='^\d{9,15}',
+                                            message= "Enter Area Code and Phone Number: (222) 555-5555"
+                                            )
+                                        ])
+
+    def clean(self):
+        cleaned_data = super().clean()
+        start_end_times = [cleaned_data.get("alert_ok_time_start"), cleaned_data.get("alert_ok_time_end")]
+
+        # Check to ensure BOTH start time and end time are submitted, not just one or the other.
+        if any(v is not None for v in start_end_times): # There is at least one value
+            if any(se is None for se in start_end_times):   # There is at least one blank
+                raise ValidationError(
+                    "Both Start and End time must be submitted together."
+                )
+        return cleaned_data
+
 
     class Meta:
         model = Profile
-        fields = ("alert_sTime", "alert_eTime", "alert", "phone_number") # So, same as before, but now we're including email
+        fields = ("alarm_on", "alert_ok_time_start", "alert_ok_time_end", "phone_number") # So, same as before, but now we're including email
+        field_order = ["alarm_on", "alert_ok_time_start", "alert_ok_time_end", "phone_number"]
 
 
 class AlertForm(forms.ModelForm):

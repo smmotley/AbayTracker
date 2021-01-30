@@ -88,60 +88,6 @@ else:
 
 main_dir = os.path.abspath(os.path.join(os.path.dirname( __file__ ), '..'))
 mapbox_access_token = "pk.eyJ1Ijoic21vdGxleSIsImEiOiJuZUVuMnBBIn0.xce7KmFLzFd9PZay3DjvAA"
-suffix_row = "_row"
-suffix_button_id = "_button"
-suffix_sparkline_graph = "_sparkline_graph"
-suffix_count = "_count"
-suffix_ooc_n = "_OOC_number"
-suffix_ooc_g = "_OOC_graph"
-suffix_indicator = "_indicator"
-stopped_interval = 100 # How many data points to include
-
-def populate_ooc(data, ucl, lcl):
-    ooc_count = 0
-    ret = []
-    for i in range(len(data)):
-        if data[i] >= ucl or data[i] <= lcl:
-            ooc_count += 1
-            ret.append(ooc_count / (i + 1))
-        else:
-            ret.append(ooc_count / (i + 1))
-    return ret
-
-def init_df():
-    ret = {}
-    for col in list(dfp[1:]):
-        data = dfp[col]
-        stats = data.describe()
-
-        std = stats["std"].tolist()
-        ucl = (stats["mean"] + 3 * stats["std"]).tolist()
-        lcl = (stats["mean"] - 3 * stats["std"]).tolist()
-        usl = (stats["mean"] + stats["std"]).tolist()
-        lsl = (stats["mean"] - stats["std"]).tolist()
-
-        ret.update(
-            {
-                col: {
-                    "count": stats["count"].tolist(),
-                    "data": data,
-                    "mean": stats["mean"].tolist(),
-                    "std": std,
-                    "ucl": round(ucl, 3),
-                    "lcl": round(lcl, 3),
-                    "usl": round(usl, 3),
-                    "lsl": round(lsl, 3),
-                    "min": stats["min"].tolist(),
-                    "max": stats["max"].tolist(),
-                    "ooc": populate_ooc(data, ucl, lcl),
-                }
-            }
-        )
-
-    return ret
-
-params = list(dfp)
-state_dict = init_df()
 
 def main(meters):
     meters = [PiRequest("R4", "Flow"), PiRequest("R11", "Flow"),
@@ -185,10 +131,7 @@ def main(meters):
             print('HTTP Request failed')
             return None
 
-    site_lat = df.lat
-    site_lon = df.lon
-    locations_name = df.name
-    locations_id = df.id
+
     locations_types = df.type.unique()
     mapbox_layers = {
         "SWE": "https://idpgis.ncep.noaa.gov/arcgis/services/NWS_Observations/NOHRSC_Snow_Analysis/"
@@ -209,22 +152,13 @@ def main(meters):
 
 # Layout for line graph plot.
     layout = dict(
-        automargin=True,
         margin=dict(l=40, r=40, b=40, t=40),
         hovermode="closest",
-        plot_bgcolor="#F9F9F9",
-        paper_bgcolor="#F9F9F9",
+        plot_bgcolor="#343a40",    # This hard codes the background. theme="plotly_dark" works if this line is removed.
+        paper_bgcolor="#343a40",
         legend=dict(font=dict(size=10), orientation="h"),
-        title="Satellite Overview",
-        mapbox=dict(
-            accesstoken=mapbox_access_token,
-            style="light",
-            center=dict(lon=-119.05, lat=38.54),
-            zoom=16,
-        ),
     )
 
-    fig = go.Figure()
 
     top_row_cards = dbc.Row([
         dbc.Col(
@@ -389,6 +323,14 @@ def main(meters):
                 dbc.CardHeader("R4 Flow"),
                 dbc.CardBody(dbc.Row([
                     dbc.Col(
+                        daq.LEDDisplay(
+                            size=30,
+                            value=int(df_all["R4_Flow"].iloc[-1]),
+                            color="#FF5E5E",
+                            backgroundColor="#343a40"
+                        ),
+                    width=4),
+                    dbc.Col(
                         dcc.Graph(
                             className="sparkline_graph",
                             style={"width": "100%", "height": "95%"},
@@ -437,6 +379,14 @@ def main(meters):
             dbc.Card([
                 dbc.CardHeader("R30 Flow"),
                 dbc.CardBody(dbc.Row([
+                    dbc.Col(
+                        daq.LEDDisplay(
+                            size=30,
+                            value=int(df_all["R30_Flow"].iloc[-1]),
+                            color="#FF5E5E",
+                            backgroundColor="#343a40"
+                        ), width=4,
+                    ),
                     dbc.Col(
                         dcc.Graph(
                             className="sparkline_graph",
@@ -551,48 +501,20 @@ def main(meters):
                                         ],
                                     ),),width=2),
                 dbc.Col(dbc.Row([
-                                dbc.Col(dcc.Graph(id="map-graph", className="col s5"), width=6),
-                                dbc.Col(dcc.Loading(
-                                            id='loading_graph',
-                                            parent_className='loading_wrapper col s5',
-                                            children=[html.Div([dcc.Graph(id="histogram")])],
-                                            type="circle",
-                                            ), width=6
-                                        )
-                                    ]),width=10),
+                    dbc.Col(dcc.Graph(id="map-graph", className="col s5"), width=6),
+                    dbc.Col(dcc.Loading(
+                                id='loading_graph',
+                                parent_className='loading_wrapper col s5',
+                                children=[html.Div([dcc.Graph(id="histogram")])],
+                                type="circle",
+                                ), width=6
+                            )
+                        ]),width=10),
             ])
                      ]
                     ),
             html.Div(id='dummy-output'),
-
-            html.Div(
-                id="top-section-container",
-                className="row",
-                children=[
-                    # Metrics summary
-                    html.Div(
-                        id="metric-summary-session",
-                        className="col-8",
-                        children=[
-                            html.Div(className="section-banner", children="Process Control Metrics Summary"),
-                            html.Div(
-                                id="metric-div",
-                                children=[
-                                    generate_metric_list_header(),
-                                    html.Div(
-                                        id="metric-rows",
-                                        children=[
-                                            generate_metric_row_helper(df_all[["Timestamp","R4_Flow","R30_Flow","R11_Flow"]],stopped_interval, 1),
-                                            generate_metric_row_helper(df_all[["Timestamp","R4_Flow","R30_Flow","R11_Flow"]], stopped_interval, 2),
-                                            generate_metric_row_helper(df_all[["Timestamp","R4_Flow","R30_Flow","R11_Flow"]], stopped_interval, 3),
-                                        ],
-                                    ),
-                                ],
-                            ),
-                        ],
-                    ),
-                ]
-            )]
+        ]
     )
 
 
@@ -817,13 +739,14 @@ def main(meters):
                     name="Gas Produced (mcf)",
                     x=df_meter.index,
                     y=df_meter['Value'],
-                    line=dict(shape="spline", smoothing=2, width=1, color="#fac1b7"),
+                    line=dict(shape="spline", smoothing=1, width=1, color="#1254b0"),
                     marker=dict(symbol="diamond-open"),
                 )
             ]
             layout_individual["title"] = main_graph_click['points'][0]['text']
+            layout_individual["template"] = "plotly_dark"
 
-        figure = dict(data=data, layout=layout_individual)
+        figure = go.Figure(data=data, layout=layout_individual)
         return figure
 
 
@@ -885,156 +808,6 @@ def getpidata(meters):
             return df_all
 
 
-# Build header
-def generate_metric_list_header():
-    return generate_metric_row(
-        "metric_header",
-        {"height": "3rem", "margin": "1rem 0", "textAlign": "center"},
-        {"id": "m_header_1", "children": html.Div("Parameter")},
-        {"id": "m_header_2", "children": html.Div("Count")},
-        {"id": "m_header_3", "children": html.Div("Sparkline")},
-        {"id": "m_header_4", "children": html.Div("OOC%")},
-        {"id": "m_header_5", "children": html.Div("%OOC")},
-        {"id": "m_header_6", "children": "Pass/Fail"},
-    )
-
-
-def generate_metric_row_helper(df_all, stopped_interval, index):
-    item = list(df_all.columns.values)[index]
-    test = df_all[df_all.columns[index]]
-    div_id = item + suffix_row
-    button_id = item + suffix_button_id
-    sparkline_graph_id = item + suffix_sparkline_graph
-    count_id = item + suffix_count
-    ooc_percentage_id = item + suffix_ooc_n
-    ooc_graph_id = item + suffix_ooc_g
-    indicator_id = item + suffix_indicator
-
-    return generate_metric_row(
-        div_id,
-        None,
-        {
-            "id": item,
-            "className": "metric-row-button-text",
-            "children": html.Button(
-                id=button_id,
-                className="metric-row-button",
-                children=item,
-                title="Click to visualize live SPC chart",
-                n_clicks=0,
-            ),
-        },
-        {"id": count_id, "children": "0"},
-        {
-            "id": item + "_sparkline",
-            "children": dcc.Graph(
-                id=sparkline_graph_id,
-                style={"width": "100%", "height": "95%"},
-                config={
-                    "staticPlot": False,
-                    "editable": False,
-                    "displayModeBar": False,
-                },
-                figure=go.Figure(
-                    {
-                        "data": [
-                            {
-                                "x": df_all["Timestamp"],
-                                "y": df_all[item],
-                                "mode": "lines+markers",
-                                "name": item,
-                                "line": {"color": "#f4d44d"},
-                            }
-                        ],
-                        "layout": {
-                            "uirevision": True,
-                            "margin": dict(l=0, r=0, t=4, b=4, pad=0),
-                            "xaxis": dict(
-                                showline=False,
-                                showgrid=False,
-                                zeroline=False,
-                                showticklabels=False,
-                            ),
-                            "yaxis": dict(
-                                showline=False,
-                                showgrid=False,
-                                zeroline=False,
-                                showticklabels=False,
-                            ),
-                            "paper_bgcolor": "rgba(0,0,0,0)",
-                            "plot_bgcolor": "rgba(0,0,0,0)",
-                        },
-                    }
-                ),
-            ),
-        },
-        {"id": ooc_percentage_id, "children": "0.00%"},
-        {
-            "id": ooc_graph_id + "_container",
-            "children": daq.GraduatedBar(
-                id=ooc_graph_id,
-                color={"gradient":True,"ranges":{"green":[0,30],"yellow":[30,70],"red":[70,100]}},
-                showCurrentValue=True,
-                max=100,
-                value=50,
-            ),
-        },
-        {
-            "id": item + "_pf",
-            "children": daq.Indicator(
-                id=indicator_id, value=True, color="#91dfd2", size=12
-            ),
-        },
-    )
-
-
-def generate_metric_row(id, style, col1, col2, col3, col4, col5, col6):
-    if style is None:
-        style = {"height": "8rem", "width": "100%"}
-
-    return html.Div(
-        id=id,
-        className="row metric-row",
-        style=style,
-        children=[
-            html.Div(
-                id=col1["id"],
-                className="col-1",
-                style={"margin-right": "2.5rem", "minWidth": "50px"},
-                children=col1["children"],
-            ),
-            html.Div(
-                id=col2["id"],
-                style={"textAlign": "center"},
-                className="col-1",
-                children=col2["children"],
-            ),
-            html.Div(
-                id=col3["id"],
-                style={"height": "100%"},
-                className="col-4",
-                children=col3["children"],
-            ),
-            html.Div(
-                id=col4["id"],
-                style={},
-                className="col-1",
-                children=col4["children"],
-            ),
-            html.Div(
-                id=col5["id"],
-                style={"height": "100%"},
-                className="col-3",
-                children=col5["children"],
-            ),
-            html.Div(
-                id=col6["id"],
-                style={"display": "flex", "justifyContent": "center"},
-                className="col-1",
-                children=col6["children"],
-            ),
-        ],
-    )
 main(None)
 
 if __name__ == '__main__':

@@ -1,23 +1,15 @@
 <!-- Button trigger modal -->
 {% load bootstrap4 %}
 {% load static %}
-<!-- Compiled and minified CSS
-    <link href="{% static "/css/base.css" %}" rel="stylesheet"> -->
-    <!-- My CSS changes -->
-    <link href="{% static "/css/style.css" %}" rel="stylesheet">
- <!-- jQuery-->
-    <script src='https://cdnjs.cloudflare.com/ajax/libs/jquery/3.4.1/jquery.min.js'></script>
-
- <!-- BOOTSTRAP CSS and JS-->
-    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css" integrity="sha384-Gn5384xqQ1aoWXA+058RXPxPg6fy4IWvTNh0E263XmFcJlSAwiGgFAW/dAiS6JXm" crossorigin="anonymous">
-    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/js/bootstrap.min.js" integrity="sha384-JZR6Spejh4U02d8jOt6vLEHfe/JQGiRRSQQxSfFWpi1MquVdAyjUar5+76PVCmYl" crossorigin="anonymous"></script>
-
 <!-- Modal -->
 <div class="modal fade show" id="myModal" role="dialog" tabindex="-1">
     <div id="alarm_modal_django" class="modal-dialog modal-dialog-centered" role="document">
         <div class="modal-content" id="alarm_modal_content_django">
             <div class="modal-header">
                 <h5 class="modal-title" id="modalTitle">Alarm Preferences</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
             </div>
             <div id="modal-body" class="modal-body">
                 <div class="div-for-dropdown" id="alert_type">
@@ -52,7 +44,7 @@
                 </div>
             <hr>
                 <div class="alarm_input" id="alarm_input">
-                    <form method = "POST">
+                    <form id="alarmForm" method = "POST">
                     <div id="alarm_wrapper" class="row">
                         {%  csrf_token %}
                         {% for alarm in alarm_preferences %}
@@ -64,7 +56,7 @@
                     <div class="alarm_notes" style="display:none"></div>
                     <div loading_state="[object Object]" class="modal-footer">
                         <button class="btn btn-primary" id="alarmSubmit" style="display: none" type="submit">Submit Changes</button>
-                        <button id="close" class="ml-auto btn btn-secondary">Close</button>
+                        <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
                     </div>
                     </form>
                 </div>
@@ -73,9 +65,9 @@
     </div>
 </div>
 
- <button id="open_alert" class="ml-auto btn btn-secondary">OPEN</button>
 
 <script>
+    //Code for updating pull downs after first pull down is selected.
     var $select1 = $( '#select1' ),
 		$select2 = $( '#select2' ),
         $options = $select2.find( 'option' );
@@ -91,11 +83,15 @@
             //$alarm_input.html(new_html)
         } ).trigger( 'change' );
 
+    //The "Edit Alarm" button in the sidebar
     $('#open_alert').click(function(){
-        console.log("CLICKED")
         $('#myModal').modal('toggle');
     });
 
+     //The Gear Icon button in the sidebar footer
+    $('#alarm_prefs').click(function(){
+        $('#myModal').modal('toggle');
+    });
     function alert_html(alarmVariable){
         $(".alert_label").remove()
         $(".alarm_user_input").prop("style", "display: none")
@@ -119,7 +115,11 @@
             $("#r4_lo").parent().append('<strong><label for="r4_lo" class="alert_label">R4 Lower Limit</label></strong>')
             $("#r4_hi").parent().append('<strong><label for="r4_hi" class="alert_label">R4 Upper Limit</label></strong>')
             $r4.parent().prop("style", "display: block")
-            $alarm_notes.html('<hr>alarm notes go here')
+            $alarm_notes.html('<hr><h5>Important R4 Levels:</h5>' +
+                '<ul>' +
+                '<li>500 cfs Pmin ~30MW' +
+                '</li>' +
+                 '</ul>')
             $alarm_notes.prop("style", "display: block")
         }
         if (alarmVariable === "R11"){
@@ -143,12 +143,48 @@
             $abay.parent().prop("style", "display: block")
         }
     }
+    // This prevents the page from reloading when we hit the submit button. However, since we're not
+    // reloading, the views.py won't send any info in the {messages} tags, so
+    $(document).ready(function() {
+    $('#alarmForm').submit(function() { // On form submit event
+        $.ajax({ // create an AJAX call...
+            data: $(this).serialize(), // get the form data
+            type: $(this).attr('method'), // GET or POST
+            url: $(this).attr('action'), // the file to call
+            success: function(response) { // on success..
+                if (response.msg) {
+                    response.msg.forEach(ele => {
+                        toast_launcher(ele)
+                    })
+                }
 
-    $('#form').submit(function(e){
-    $.post('/url/', $(this).serialize(), function(data){
-       $('.message').html(data.message);
-       // of course you can do something more fancy with your respone
+                $('#myModal').modal('toggle'); // Close modal if it's open
+                $('#success_div').html(response); // update the DIV
+                //toastr.error("Value Not Accepted", '',{closeButton: true, timeOut:0, extendedTimeOut:0, positionClass:"toast-top-right"})
+            },
+            error: function(e, x, r) { // on error..
+                $('#error_div').html(e); // update the DIV
+                if (e.msg){
+                    toast_launcher(e)
+                }
+            }
+        });
+        return false;
     });
-    e.preventDefault();
 });
+    function toast_launcher(data){
+        if (data.tags=="success"){
+            toastr.success(data.message, {closeButton: true, timeOut:5000, positionClass:"toast-top-right"});
+        }
+        if (data.tags=="info"){
+            toastr.info(data.message, {closeButton: true, timeOut:5000, positionClass:"toast-top-right"});
+        }
+        if (data.tags=="warning"){
+            toastr.warning(data.message, {closeButton: true, timeOut:5000, positionClass:"toast-top-right"});
+        }
+        if (data.tags=="error"){
+            toastr.error(data.message, {closeButton: true, timeOut:5000, positionClass:"toast-top-right"});
+        }
+    }
+
 </script>

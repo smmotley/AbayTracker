@@ -46,13 +46,10 @@
                 <div class="sidebar-submenu" style="display: none;">
               <ul>
                 <li>
-                  <button type="button" id="open_alert" class="btn btn-primary btn-sm">New Alarm</button>
+                  <a href="#" class="submenu-icon" id="open_alert"><i class="fa fa-bell"></i>Edit Alarms</a>
                 </li>
                 <li>
-                  <a href="#">Orders</a>
-                </li>
-                <li>
-                  <a href="#">Credit cart</a>
+                  <a href="#" class="submenu-icon" id="open_alert_mute"><i class="fa fa-bell"></i>Alarms On/Off</a>
                 </li>
               </ul>
             </div>
@@ -104,11 +101,13 @@
         <i class="fa fa-envelope"></i>
         <span class="badge badge-pill badge-success notification">7</span>
       </a>
-      <a href="#">
+      <a id="alarm_prefs" href="#">
         <i class="fa fa-cog"></i>
         <span class="badge-sonar"></span>
       </a>
-      <a href="#">
+      <a id="alarm_on_off" href="#" {% if user_profile_data.fields|get_item:profile_form.alarm_on.name %}
+          style="color:#8bff24; text-shadow: 0px 0px 10px rgb(40 255 1 / 50%)"
+       {% endif %}>
         <i class="fa fa-power-off"></i>
       </a>
     </div>

@@ -31,6 +31,9 @@ a {
 .text-padding{
   padding: 5px;
 }
+.col-12, .col-md-3, .col-lg-3, .col{
+    margin-bottom: 1rem !important;
+}
 /* Graph Layout ––––––––––––––––––––––––––––––––––––––––––––––––––*/
 .div-for-charts{
   display: flex;
@@ -216,6 +219,7 @@ a {
 
 .top-cards .card-body .row {
     height: 8rem;
+    margin-bottom: 20px;
 }
 
 .col{
@@ -243,7 +247,7 @@ a {
 /* TANK */
 /* This if for the text in the tank */
 .gQmwTq{
-    font-size: 1.5vw !important;
+    font-size: 1.2vw !important;
 }
 /* This if for the tick labels (y-axis) of the tank
     For now, we're turning it off*/

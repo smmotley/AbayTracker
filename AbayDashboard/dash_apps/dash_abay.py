@@ -1,14 +1,17 @@
 import os
+from io import BytesIO
 import dash
 import dash_core_components as dcc
 import dash_html_components as html
 import pandas as pd
+from zipfile import ZipFile
 import copy
 import requests
+from urllib.error import HTTPError
 from datetime import datetime, timedelta, time
+import pytz
 import numpy as np
 from django.contrib.staticfiles.storage import staticfiles_storage
-
 from dash.dependencies import Input, Output, State
 from plotly import graph_objs as go
 from plotly.graph_objs import *
@@ -45,6 +48,7 @@ class PiRequest:
         self.baseURL = 'https://flows.pcwa.net/piwebapi/attributes'
         self.meter_element_type = self.meter_element_type()  # Gauging Stations, Reservoirs, Generation Units
         self.url = self.url()
+        self.data = self.grab_data()
 
     def url(self):
         try:
@@ -61,12 +65,32 @@ class PiRequest:
             print('HTTP Request failed')
             return None
 
+    def grab_data(self):
+        # Now that we have the url for the PI data, this request is for the actual data. We will
+        # download data from the beginning of the water year to the current date. (We can't download data
+        # past today's date, if we do we'll get an error.
+        try:
+            response = requests.get(
+                url=self.url,
+                params={"startTime": (datetime.utcnow() + timedelta(hours=-24)).strftime("%Y-%m-%dT%H:00:00-00:00"),
+                        "endTime": datetime.utcnow().strftime("%Y-%m-%dT%H:00:00-00:00"),
+                        "interval": "1h",
+                        },
+            )
+            print('Response HTTP Status Code: {status_code}'.format(status_code=response.status_code))
+            j = response.json()
+            # We only want the "Items" object.
+            return j["Items"]
+        except requests.exceptions.RequestException:
+            print('HTTP Request failed')
+            return None
+
     def meter_element_type(self):
         if self.attribute == "Flow":
             return "Gauging Stations"
         if "Afterbay" in self.meter_name:
             return "Reservoirs"
-        if "Middle Fork" in self.meter_name:
+        if "Middle Fork" or "Oxbow" in self.meter_name:
             return "Generation Units"
 
 local = False
@@ -87,66 +111,45 @@ else:
 
 main_dir = os.path.abspath(os.path.join(os.path.dirname( __file__ ), '..'))
 mapbox_access_token = "pk.eyJ1Ijoic21vdGxleSIsImEiOiJuZUVuMnBBIn0.xce7KmFLzFd9PZay3DjvAA"
-suffix_row = "_row"
-suffix_button_id = "_button"
-suffix_sparkline_graph = "_sparkline_graph"
-suffix_count = "_count"
-suffix_ooc_n = "_OOC_number"
-suffix_ooc_g = "_OOC_graph"
-suffix_indicator = "_indicator"
-stopped_interval = 100 # How many data points to include
 
-def populate_ooc(data, ucl, lcl):
-    ooc_count = 0
-    ret = []
-    for i in range(len(data)):
-        if data[i] >= ucl or data[i] <= lcl:
-            ooc_count += 1
-            ret.append(ooc_count / (i + 1))
-        else:
-            ret.append(ooc_count / (i + 1))
-    return ret
-
-def init_df():
-    ret = {}
-    for col in list(dfp[1:]):
-        data = dfp[col]
-        stats = data.describe()
-
-        std = stats["std"].tolist()
-        ucl = (stats["mean"] + 3 * stats["std"]).tolist()
-        lcl = (stats["mean"] - 3 * stats["std"]).tolist()
-        usl = (stats["mean"] + stats["std"]).tolist()
-        lsl = (stats["mean"] - stats["std"]).tolist()
-
-        ret.update(
-            {
-                col: {
-                    "count": stats["count"].tolist(),
-                    "data": data,
-                    "mean": stats["mean"].tolist(),
-                    "std": std,
-                    "ucl": round(ucl, 3),
-                    "lcl": round(lcl, 3),
-                    "usl": round(usl, 3),
-                    "lsl": round(lsl, 3),
-                    "min": stats["min"].tolist(),
-                    "max": stats["max"].tolist(),
-                    "ooc": populate_ooc(data, ucl, lcl),
-                }
-            }
-        )
-
-    return ret
-
-params = list(dfp)
-state_dict = init_df()
 
 def main(meters):
-    site_lat = df.lat
-    site_lon = df.lon
-    locations_name = df.name
-    locations_id = df.id
+    meters = [PiRequest("R4", "Flow"), PiRequest("R11", "Flow"),
+              PiRequest("R30", "Flow"), PiRequest("Afterbay", "Elevation"),
+              PiRequest("Afterbay", "Elevation Setpoint"),
+              PiRequest("Middle Fork", "Power - (with Ralston)"), PiRequest("Oxbow", "Power")]
+
+    # This will store the data for all the PI requests
+    df_all = pd.DataFrame()
+    for meter in meters:
+        try:
+            df_meter = pd.DataFrame.from_dict(meter.data)
+
+            # If there was an error getting the data, you will have an empty dataframe, escape for loop
+            if df_meter.empty:
+                return None
+
+            # Convert the Timestamp to a pandas datetime object and convert to Pacific time.
+            df_meter.Timestamp = pd.to_datetime(df_meter.Timestamp).dt.tz_convert('US/Pacific')
+            df_meter.index = df_meter.Timestamp
+            df_meter.index.names = ['index']
+
+            # Rename the column (this was needed if we wanted to merge all the Value columns into a dataframe)
+            renamed_col = (f"{meter.meter_name}_{meter.attribute}").replace(' ', '_')
+            df_meter.rename(columns={"Value": f"{renamed_col}"}, inplace=True)
+
+            if df_all.empty:
+                df_all = df_meter
+            else:
+                df_all = pd.merge(df_all, df_meter[["Timestamp", renamed_col]], on="Timestamp", how='outer')
+
+
+        except ValueError:
+            print('Pandas Dataframe May Be Empty')
+            return None
+
+
+    locations_types = df.type.unique()
     mapbox_layers = {
         "SWE": "https://idpgis.ncep.noaa.gov/arcgis/services/NWS_Observations/NOHRSC_Snow_Analysis/"
                 "MapServer/WmsServer?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&FORMAT=image/"
@@ -158,267 +161,467 @@ def main(meters):
         "PRECIP_72": "https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/q2-p72h-900913/{z}/{x}/{y}.png",
     }
 
-    alert_options = {
+    map_meter_options = {
         'River Flows': ['R4', 'R11', 'R20', 'R30'],
         'Abay Management': ['Elevation', 'Oxbow', 'Rafting'],
         'Generation': ['Oxbow', 'French Meadows', 'Ralston']
     }
 
-
+# Layout for line graph plot.
     layout = dict(
-        automargin=True,
-        margin=dict(l=40, r=40, b=10, t=40),
+        margin=dict(l=40, r=40, b=40, t=40),
         hovermode="closest",
-        plot_bgcolor="#F9F9F9",
-        paper_bgcolor="#F9F9F9",
+        plot_bgcolor="#343a40",    # This hard codes the background. theme="plotly_dark" works if this line is removed.
+        paper_bgcolor="#343a40",
         legend=dict(font=dict(size=10), orientation="h"),
-        title="Satellite Overview",
-        mapbox=dict(
-            accesstoken=mapbox_access_token,
-            style="light",
-            center=dict(lon=-119.05, lat=38.54),
-            zoom=16,
-        ),
+        height=400
     )
 
-    fig = go.Figure()
 
-    # This is for the large outer Ring
-    fig.add_trace(go.Scattermapbox(
-            lat=site_lat,
-            lon=site_lon,
-            mode='text+markers',                # A mode of "text" will just show hover
-            marker=go.scattermapbox.Marker(
-                size=17,
-                color='rgb(255, 0, 0)',
-                opacity=0.7
-            ),
-            text=locations_id,
-            textfont=dict(
-                family="sans serif",
-                size=18,
-                color="white"
-            ),
-            textposition="top center",
-            hoverinfo='text'
-        ))
+    top_row_cards = dbc.Row([
+        # Top Card Columns.
+        # Every card in this  column denoted by a classname of: col-md-6 col-xxl-3 mb-3 pr-md-2"
+        # That stands for:
+        # col-md-6: take up 6 grid spaces (50% of the row) for medium screens
+        # col-lg-3: take up 3 columns (25% of the row) for large screens
+        # mb-3: margin-bottom of 3: 1 rem (e.g. 16px if font-size is 16)
+        # pr-md-2: padding-right for medium-size screens or larger is 2: 0.5 rem or 8px if fontsize is 16px
+        dbc.Col(
+            # ABAY CARD class of h-md-100 which means height on medium screens of 100%
+            dbc.Card([
+            dbc.CardHeader(f"Abay - "
+                           f"Elev: {round(df_all['Afterbay_Elevation'].iloc[-1],1)}"),
+                           #f" Updated: {(df_all['Timestamp'].iloc[-1]).strftime('%b %d, %H:%M %p')}"),
+            # ABAY CARD BODY has ONE row and TWO columns.
+            # The body class is: d-flex aligh-items-end
+            # d-flex (display-flex): create a flexbox container and transform direct children elements into flex items.
+            # align-items-end: center everything in this flex container from the bottom right corner.
+            dbc.CardBody(
+                # THE ROW OF THIS CARD BODY HAS TWO COLUMNS, with class of flex-grow-1
+                # flex-grow-1: the rate at which this will grow relative to other rows...not sure this is needed.
+                dbc.Row([
+                    dbc.Col(
+                        daq.Tank(
+                            id='my-tank2',
+                            className='dark-theme-control',
+                            value=round(df_all["Afterbay_Elevation"].iloc[-1], 1),
+                            min=1165,
+                            height=110,  # Required! This is based off of a top-row height of 200px.
+                            max=df_all["Afterbay_Elevation_Setpoint"].values.max(),
+                            color='#2376f3',
+                            units="",
+                            showCurrentValue=True,
+                        ), width=6,
+                    ),
+                    dbc.Col(
+                        dcc.Graph(
+                            className="sparkline_graph",
+                            style={"width": "100%", "height": "100%"},
+                            config={
+                                "staticPlot": False,
+                                "editable": False,
+                                "displayModeBar": False,
+                            },
+                            figure={
+                                    "data": [
+                                        {
+                                            "x": df_all['Timestamp'][-10:],
+                                            "y": df_all['Afterbay_Elevation'][-10:],
+                                            "type": "bar",
+                                            "name": "Elevation",
+                                            "marker":{"color":'#2c7be5'},
+                                            #"text":df_all['Afterbay_Elevation'][-10:],
+                                            #"hoverinfo":"y",
+                                            # The <extra></extra> gets rid of the y-axis label
+                                            # see: https://plotly.com/python/reference/#bar-hovertext
+                                            "hovertemplate": "%{x|%b-%d <br> %I:%M %p} <br> %{y}<extra></extra>",
+                                            #"width":"1.5",
+                                        },
+                                        {
+                                            "x": df_all['Timestamp'][-10:],
+                                            "y": df_all['Afterbay_Elevation_Setpoint'][-10:] - df_all["Afterbay_Elevation"][-10:],
+                                            "type": "bar",
+                                            "name": "Space",
+                                            "marker": {"color": '#061325'},
+                                            "hoverinfo": "skip",
+                                            #"width": "1.5",
+                                        },
 
-    #This is for the small inner right.
-    fig.add_trace(go.Scattermapbox(
-            lat=site_lat,
-            lon=site_lon,
-            mode='markers',
-            marker=go.scattermapbox.Marker(
-                size=8,
-                color='rgb(242, 177, 172)',
-                opacity=0.7
-            ),
-            hoverinfo='text',
-            text=[i for i in locations_name],
-        ))
-
-    fig.update_layout(
-        title='Meter Locations',
-        hovermode='closest',
-        margin=dict(l=10, r=10, b=10, t=40),
-        plot_bgcolor="#F9F9F9",
-        paper_bgcolor="#F9F9F9",
-        showlegend=False,
-        mapbox=dict(
-            accesstoken=mapbox_access_token,
-            bearing=0,
-            center=dict(
-                lat=39,
-                lon=-120.5
-            ),
-            pitch=0,
-            zoom=9,
-            style='dark'
+                                    ],
+                                    "layout": {
+                                        "margin": dict(l=0, r=0, t=4, b=4, pad=0),
+                                        "title": None,
+                                        "showlegend":False,
+                                        "yaxis":dict(
+                                            title=None,
+                                            titlefont_size=16,
+                                            tickfont_size=14,
+                                            showline=False,
+                                            showgrid=False,
+                                            zeroline=False,
+                                            showticklabels=False,
+                                            visible=False,
+                                            range=[1168,df_all["Afterbay_Elevation_Setpoint"].values.max()]
+                                            ),
+                                        "xaxis":dict(
+                                            showline=False,
+                                            showgrid=False,
+                                            zeroline=False,
+                                            showticklabels=False,
+                                            visible=False,  # numbers below
+                                        ),
+                                        "legend": None,
+                                        "width": 140,
+                                        "hovermode":"closest",
+                                        "barmode": 'relative',
+                                        "paper_bgcolor":'rgba(0,0,0,0)',
+                                        "plot_bgcolor":"rgba(0,0,0,0)",
+                                        #"bargap": 0.05, # gap between bars of adjacent location coordinates.
+                                        #"bargroupgap":0.05, # gap between bars of the same location coordinate.,
+                                        "autosize": True,
+                                    },
+                                }
+                        ), width="6", className='sparkline pl-0',
+                    )
+                ]),
+                className='align-items-end'
+            )
+            ], color="dark", inverse=True, className="h-100"),
+            className="col-sm-12 col-md-6 col-lg-3 mb-3 pr-md-2"
         ),
+        dbc.Col(
+            dbc.Card([
+                dbc.CardHeader("MF+RA Gen vs Scheduled"),
+                dbc.CardBody(
+                    dbc.Row([
+                            dbc.Col(dbc.Row([
+                                    dbc.Col("MFPH", width=12, className='text-uppercase text-tracked mb-2 text-nowrap'),
+                                    dbc.Col(round(df_all["Middle_Fork_Power_-_(with_Ralston)"].iloc[-1],1), width=12,
+                                            className='badge badge-success text-size-2 text-monospace mx-auto'),
+                                    dbc.Col("Ox", width=12, className='text-uppercase text-tracked mt-2 text-nowrap'),
+                                    dbc.Col(round(df_all["Oxbow_Power"].iloc[-1], 1), width=12,
+                                            className='badge badge-success text-size-2 text-monospace mx-auto'),
+                            ], className='gen_badge', style={"height":"30%", "top":"-10px"}),width=3),
+                    dbc.Col(
+                        # Row Classname of "h-100" is critical here, since the plots will only take up space that's
+                        # taken. But plotly plots are very stupid, for this to really work nicely, it's best to
+                        # explicitly say the height of the object. If you don't, the first item that draws will take
+                        # up the space in the column (so in this case, there are two graphs and the second one gets,
+                        # squished just enough to make it noticable.
+                        dbc.Row([
+                        dbc.Col(
+                            dcc.Graph(
+                                className="sparkline_graph h-100",
+                                config={
+                                    "staticPlot": False,
+                                    "editable": False,
+                                    "displayModeBar": False,
+                                },
+                                figure=go.Figure(
+                                    {
+                                        "data": [
+                                            {
+                                                "x": df_all["Timestamp"],
+                                                "y": df_all["Middle_Fork_Power_-_(with_Ralston)"],
+                                                "mode": "lines+markers",
+                                                "name": "MFPH",
+                                                "line": {"color": "#f4d44d"},
+                                                "hovertemplate": "%{x|%b-%d <br> %I:%M %p} <br> %{y:.1f}<extra></extra>",
+                                            }
+                                        ],
+                                        "layout": {
+                                            "margin": dict(l=0, r=0, t=4, b=4, pad=0),
+                                            "xaxis": dict(
+                                                showline=False,
+                                                showgrid=False,
+                                                zeroline=False,
+                                                showticklabels=False,
+                                            ),
+                                            "yaxis": dict(
+                                                showline=False,
+                                                showgrid=False,
+                                                zeroline=False,
+                                                showticklabels=False,
+                                            ),
+                                            "autosize": True,
+                                            "height" : 50, #px
+                                            "paper_bgcolor": "rgba(0,0,0,0)",
+                                            "plot_bgcolor": "rgba(0,0,0,0)",
+                                        },
+                                    }
+                                ),
+                            ), width=11, className='sparkline'),
+                        dbc.Col(
+                            dcc.Graph(
+                                className="sparkline_graph h-100",
+                                config={
+                                    "staticPlot": False,
+                                    "editable": False,
+                                    "displayModeBar": False,
+                                },
+                                figure=go.Figure(
+                                    {
+                                        "data": [
+                                            {
+                                                "x": df_all["Timestamp"],
+                                                "y": df_all["Oxbow_Power"],
+                                                "mode": "lines+markers",
+                                                "name": "Oxbow",
+                                                "line": {"color": "#f4d44d"},
+                                                "hovertemplate": "%{x|%b-%d <br> %I:%M %p} <br> %{y:.1f}<extra></extra>",
+                                            }
+                                        ],
+                                        "layout": {
+                                            "margin": dict(l=0, r=0, t=4, b=4, pad=0),
+                                            "xaxis": dict(
+                                                showline=False,
+                                                showgrid=False,
+                                                zeroline=False,
+                                                showticklabels=False,
+                                            ),
+                                            "yaxis": dict(
+                                                showline=False,
+                                                showgrid=False,
+                                                zeroline=False,
+                                                showticklabels=False,
+                                            ),
+                                            "autosize": True,
+                                            "height": 50, #px
+                                            "paper_bgcolor": "rgba(0,0,0,0)",
+                                            "plot_bgcolor": "rgba(0,0,0,0)",
+                                        },
+                                    }
+                                ),
+                            ), width=11, className='sparkline'),
+                        ], className='h-100'), width=9, className='sparkline'),
+                ],
+                    className="flex-grow-1"),
+                    className='d-flex align-items-end')
+            ], color="dark", inverse=True, className='h-100'),
+            className="col-sm-12 col-md-6 col-lg-3 mb-3 pr-md-2"
+        ),
+        dbc.Col(
+            dbc.Card([
+                dbc.CardHeader(
+                               children=[
+                                "R4 Flow",
+                               html.Label(
+                                   id="cnrfc_switch",
+                                   n_clicks=0,
+                                   style={'float': 'right', 'margin-bottom': '0'},
+                                   children=[
+                                       dcc.Input(
+                                       type="checkbox",
+                                       id="cnrfc_toggle",
+                                       className="c-switch-input",
+                                       value="",
+                                   ),
+                                    html.Span(
+                                        className="c-switch-slider",
+                                        id="cnrfc_switch_span",
+                                        n_clicks=0,
+                                        **{'data-checked':"on",
+                                           'data-unchecked':"off"},
+                                    ),
+                                   ],
+                                   className="c-switch c-switch-label c-switch-success c-switch-sm",
+                               )]
+                               ),
+                dbc.CardBody(
+                    dbc.Row([
+                    dbc.Col(
+                        daq.LEDDisplay(
+                            size=20,
+                            value=int(df_all["R4_Flow"].iloc[-1]),
+                            color="#FF5E5E",
+                            backgroundColor="#343a40"
+                        ),
+                    width=3),
+                    dbc.Col(
+                        dcc.Graph(
+                            id="r4sparkline",
+                            className="sparkline_graph h-100",
+                            config={
+                                "staticPlot": False,
+                                "editable": False,
+                                "displayModeBar": False,
+                            },
+                            figure=go.Figure(
+                            ),
+                        ), width=9, className='sparkline'
+                    )
+                ], className="h-100"
+                    ),
+                )
+            ], color="dark", className="h-100", inverse=True),
+            className="col-sm-12 col-md-6 col-lg-3 mb-3 pr-md-2"
+        ),
+        dbc.Col(
+            dbc.Card([
+                dbc.CardHeader(children=[
+                                "R30 Flow",
+                               html.Label(
+                                   id="cnrfc_switch_r30",
+                                   n_clicks=0,
+                                   style={'float': 'right', 'margin-bottom': '0'},
+                                   children=[
+                                       dcc.Input(
+                                       type="checkbox",
+                                       id="cnrfc_toggle_r30",
+                                       className="c-switch-input",
+                                       value="",
+                                   ),
+                                    html.Span(
+                                        className="c-switch-slider",
+                                        id="cnrfc_switch_span_r30",
+                                        n_clicks=0,
+                                        **{'data-checked':"on",
+                                           'data-unchecked':"off"},
+                                    ),
+                                   ],
+                                   className="c-switch c-switch-label c-switch-success c-switch-sm",
+                               )]),
+                dbc.CardBody(
+                    dbc.Row([
+                    dbc.Col(
+                        daq.LEDDisplay(
+                            size=20,
+                            value=int(df_all["R30_Flow"].iloc[-1]),
+                            color="#FF5E5E",
+                            backgroundColor="#343a40"
+                        ), width=3
+                    ),
+                    dbc.Col(
+                        dcc.Graph(
+                            className="sparkline_graph h-100",
+                            id="r30sparkline",
+                            config={
+                                "staticPlot": False,
+                                "editable": False,
+                                "displayModeBar": False,
+                            },
+                            figure=go.Figure(
+                                {
+                                    "data": [
+                                        {
+                                            "x": df_all["Timestamp"],
+                                            "y": df_all["R30_Flow"],
+                                            "mode": "lines+markers",
+                                            "name": "something",
+                                            "line": {"color": "#f4d44d"},
+                                            "hovertemplate": "%{x|%b-%d <br> %I:%M %p} <br> %{y:.1f}<extra></extra>",
+                                        }
+                                    ],
+                                    "layout": {
+                                        "margin": dict(l=0, r=0, t=4, b=4, pad=0),
+                                        "xaxis": dict(
+                                            showline=False,
+                                            showgrid=False,
+                                            zeroline=False,
+                                            showticklabels=False,
+                                        ),
+                                        "yaxis": dict(
+                                            showline=False,
+                                            showgrid=False,
+                                            zeroline=False,
+                                            showticklabels=False,
+                                        ),
+                                        "autosize": True,
+                                        "paper_bgcolor": "rgba(0,0,0,0)",
+                                        "plot_bgcolor": "rgba(0,0,0,0)",
+                                    },
+                                }
+                            ),
+                        ), width=9, className='sparkline'
+                    )
+                ], className="h-100"
+                    ),
+                )
+            ], color="dark", inverse=True, className='h-100'),
+            className="col-sm-12 col-md-6 col-lg-3 mb-3 pr-md-2"
+        )
+        #dbc.Col(dbc.Card(card_content, color="dark", inverse=True)),
+        #dbc.Col(dbc.Card(card_content, color="dark", inverse=True)),
+        #dbc.Col(dbc.Card(card_content, color="dark", inverse=True)),
+        ],
+        className='top-cards no-gutters'
     )
 
-    subheader = dbc.Row(className='mb-2 mb-xl-3',
-                        children=[
-                            dbc.Col(className="col-auto d-none d-sm-block"),
-                            html.H3("Dashboard"),
-                            dbc.Col(className="col-auto ml-auto text-right nt-n1", children=[
-                                        dcc.DatePickerSingle(
-                                        id="date-picker",
-                                        min_date_allowed=dt(2020, 4, 1),
-                                        max_date_allowed=dt(2021, 9, 30),
-                                        initial_visible_month=dt(2020, 4, 1),
-                                        date=dt(2020, 4, 1).date(),
-                                        display_format="MMMM D, YYYY",
-                                    )
-                            ]
-
-                            )
-                        ])
 
     app.layout = html.Main(
-        className='content',
+        className='content container',
         children=[
-            html.Div(className='container-fluid',
-                     children=[
-            subheader,
-            dbc.Row([
-            dbc.Col((html.H2("PCWA - STATION DATA"),
-                            html.P(
-                                """Select a station to display current flows or reservoir levels."""
-                            ),
-                            html.Div(
-                                className="div-for-dropdown",
-                                children=[
-                                    dcc.DatePickerSingle(
-                                        id="date-picker",
-                                        min_date_allowed=dt(2014, 4, 1),
-                                        max_date_allowed=dt(2014, 9, 30),
-                                        initial_visible_month=dt(2014, 4, 1),
-                                        date=dt(2014, 4, 1).date(),
-                                        display_format="MMMM D, YYYY",
-                                    )
-                                ],
-                            ),
-                            # Change to side-by-side for mobile layout
-                                html.Div(
-                                    className="div-for-dropdown",
-                                    children=[
-                                        # Dropdown for locations on map
-                                        dcc.Dropdown(
-                                            id="alert-dropdown",
-                                            options=[
-                                                {"label": i, "value": i}
-                                                for i in locations_id
-                                            ],
-                                            placeholder="Select meter",
-                                        )
-                                    ],
-                                ),
-                                html.Div(
-                                    className="div-for-dropdown",
-                                    children=[
-                                        # Dropdown to select times
-                                        dcc.Dropdown(
-                                            id="mapbox_layer_dropdown",
-                                            options=[
-                                                {
-                                                    "label": key,
-                                                    "value": value,
-                                                }
-                                                for key, value in mapbox_layers.items()
-                                            ],
-                                            multi=True,
-                                            placeholder="Select map layer",
-                                        )
-                                    ],
-                                ),),width=2),
-            dbc.Col(dbc.Row([
-                            dbc.Col(dcc.Graph(figure=fig, id="map-graph", className="col s5"), width=6),
-                            dbc.Col(dcc.Loading(
-                                        id='loading_graph',
-                                        parent_className='loading_wrapper col s5',
-                                        children=[html.Div([dcc.Graph(id="histogram")])],
-                                        type="circle",
-                                        ), width=6
-                                    )
-                                ]),width=10),
-        ])
-                     ]
-                    ),
-        html.Div(id='dummy-output'),
-
-            html.Div(
-                id="top-section-container",
-                className="row",
+            top_row_cards,
+            dbc.Row([html.Div(
+                className="div-for-dropdown ml-2 col-sm-2 col-md-4 col-lg-4",
                 children=[
-                    # Metrics summary
-                    html.Div(
-                        id="metric-summary-session",
-                        className="col-8",
-                        children=[
-                            html.Div(className="section-banner", children="Process Control Metrics Summary"),
-                            html.Div(
-                                id="metric-div",
-                                children=[
-                                    generate_metric_list_header(),
-                                    html.Div(
-                                        id="metric-rows",
-                                        children=[
-                                            generate_metric_row_helper(stopped_interval, 1),
-                                            generate_metric_row_helper(stopped_interval, 2),
-                                            generate_metric_row_helper(stopped_interval, 3),
-                                            generate_metric_row_helper(stopped_interval, 4),
-                                            generate_metric_row_helper(stopped_interval, 5),
-                                            generate_metric_row_helper(stopped_interval, 6),
-                                            generate_metric_row_helper(stopped_interval, 7),
-                                        ],
-                                    ),
-                                ],
-                            ),
-                        ],
-                    ),
-                    html.Div(
-                        id="abay_storage",
-                        className="col-4",
-                        children=[
-                            daq.Tank(
-                                id='my-tank',
-                                value=5,
-                                min=0,
-                                max=10,
-                                style={'margin-left': '50px'},
-                                units = "Elevation",
-                                showCurrentValue = True
-                            )
-                        ]
+                    dcc.DatePickerSingle(
+                        id="date-picker",
+                        min_date_allowed=dt(2018, 4, 1),
+                        max_date_allowed=dt.now().date(),
+                        initial_visible_month=dt.now().date(),
+                        date=dt.now().date(),
+                        display_format="MMMM D, YYYY",
                     )
-                ]
-            )]
+                ],
+            ),
+                # Change to side-by-side for mobile layout
+                html.Div(
+                    className="div-for-dropdown ml-2 col-sm-2 col-md-3 col-lg-3",
+                    children=[
+                        # Dropdown for locations on map
+                        dcc.Dropdown(
+                            id="alert-dropdown",
+                            options=[
+                                {"label": i, "value": i}
+                                for i in locations_types
+                            ],
+                            placeholder="Select meter",
+                        )
+                    ],
+                ),
+                html.Div(
+                    className="div-for-dropdown col-sm-2 col-md-3 col-lg-3",
+                    children=[
+                        # Dropdown to select times
+                        dcc.Dropdown(
+                            id="mapbox_layer_dropdown",
+                            options=[
+                                {
+                                    "label": key,
+                                    "value": value,
+                                }
+                                for key, value in mapbox_layers.items()
+                            ],
+                            multi=True,
+                            placeholder="Map Layers",
+                        )
+                    ],
+                ),
+            ], className="col-6 no-gutters"),
+            dbc.Row([dbc.Col(dcc.Graph(id="map-graph"), className='col-sm-12 col-md-12 col-lg-6 mb-3 pr-md-2'),
+                     dbc.Col(dcc.Loading(
+                                id='loading_graph',
+                                parent_className='loading_wrapper',
+                                children=[html.Div([dcc.Graph(id="histogram")])],
+                                type="circle",
+                                ), className='col-sm-12 col-md-12 col-lg-6 mb-3 pr-md-2'
+                            )
+            ], className="no-gutters"),
+            html.Div(id='dummy-output'),
+        ]
     )
 
 
-    def produce_individual(api_well_num):
+    def produce_individual(api_stn_num):
         try:
-            point = df.iloc[api_well_num]
+            point = df.iloc[api_stn_num]
         except:
             return None
+        df_meter = pd.DataFrame.from_dict(PiRequest(point['id'],"Flow").data)
 
-        try:
-            response = requests.get(
-                url="https://flows.pcwa.net/piwebapi/attributes",
-                params={"path": f"\\\\BUSINESSPI2\\OPS\\Gauging Stations\\{point['id']}|Flow",
-                    },
-                )
-            j = response.json()
-            url_flow = j['Links']['InterpolatedData']
-
-        except requests.exceptions.RequestException:
-            print('HTTP Request failed')
-            return None
-
-        # Now that we have the url for the PI data, this request is for the actual data. We will
-        # download data from the beginning of the water year to the current date. (We can't download data
-        # past today's date, if we do we'll get an error.
-        try:
-            response = requests.get(
-                url=url_flow,
-                params={"startTime": (datetime.now() + timedelta(days=-3)).strftime("%Y-%m-%dT%H:00:00-07:00"),
-                        "endTime": datetime.now().strftime("%Y-%m-%dT%H:00:00-07:00"),
-                        "interval": "1h",
-                        },
-            )
-            print('Response HTTP Status Code: {status_code}'.format(status_code=response.status_code))
-            j = response.json()
-
-            # We only want the "Items" object.
-            df_meter = pd.DataFrame.from_dict((j["Items"]))
-
-            # Convert the Timestamp to a pandas datetime object and convert to Pacific time.
-            df_meter.index = pd.to_datetime(df_meter.Timestamp)
-            #df_meter.index = df.index.tz_convert('US/Pacific')
-        except requests.exceptions.RequestException:
-            print('HTTP Request failed')
-            return None
+        # Convert the Timestamp to a pandas datetime object and convert to Pacific time.
+        df_meter.index = pd.to_datetime(df_meter.Timestamp).dt.tz_convert('US/Pacific')
         return df_meter
 
 
@@ -438,17 +641,97 @@ def main(meters):
         return html.H5(f"Change Alarm Values For: {value}", className="modal-title")
 
 
+    #This callback does two things:
+    # 1: Call back for adding / removing mapbox layer
+    # 2: Callback for changing marker display.
     @app.callback(
-        Output(component_id="alarm_modal", component_property="is_open", ),
-        [Input(component_id="open_modal", component_property="n_clicks"), Input(component_id="close", component_property="n_clicks")],
-        [State(component_id="alarm_modal", component_property="is_open")],
+        Output(component_id="map-graph", component_property="figure", ),
+        [Input(component_id="alert-dropdown", component_property="value"),
+         Input("mapbox_layer_dropdown", "value")],
     )
-    def toggle_modal(n1, n2, is_open):
-        test = is_open
-        if n1 or n2:
-            return not is_open
-        return is_open
+    def map_markers(marker_type_val, mapbox_overlay):
+        fig = go.Figure()
 
+        # MARKER SECTION
+        if marker_type_val is None:
+            markers = df.loc[df['type'] == 'Flow']
+        else:
+            markers = df.loc[df['type'] == marker_type_val]
+
+        # This is for the large outer Ring
+        fig.add_trace(go.Scattermapbox(
+            lat=markers.lat,
+            lon=markers.lon,
+            mode='text+markers',  # A mode of "text" will just show hover
+            marker=go.scattermapbox.Marker(
+                size=17,
+                color='rgb(38, 174, 38)',
+                opacity=0.7
+            ),
+            text=markers.id,
+            textfont=dict(
+                family="sans serif",
+                size=18,
+                color="white"
+            ),
+            textposition="top center",
+            hoverinfo='text'
+        ))
+
+        # This is for the small inner right.
+        fig.add_trace(go.Scattermapbox(
+            lat=markers.lat,
+            lon=markers.lon,
+            mode='markers',
+            marker=go.scattermapbox.Marker(
+                size=8,
+                color='rgb(172, 242, 177)',
+                opacity=0.7
+            ),
+            hoverinfo='text',
+            text=[i for i in markers.name],
+        ))
+
+        fig.update_layout(
+            title='Meter Locations',
+            hovermode='closest',
+            margin=dict(l=10, r=10, b=10, t=40),
+            plot_bgcolor="#F9F9F9",
+            paper_bgcolor="#F9F9F9",
+            showlegend=False,
+            mapbox=dict(
+                accesstoken=mapbox_access_token,
+                bearing=0,
+                center=dict(
+                    lat=39,
+                    lon=-120.5
+                ),
+                pitch=0,
+                zoom=9,
+                style='dark'
+            ),
+        )
+
+        # MAPBOX OVERLAY SECTION
+        if mapbox_overlay is None or len(mapbox_overlay) == 0:
+            fig.update_layout(
+                mapbox_layers=[
+                    {}
+                ])
+            return fig
+        fig.update_layout(
+            mapbox_layers=[
+                {
+                    "below": 'traces',
+                    "sourcetype": "raster",
+                    "sourceattribution": "United States Geological Survey",
+                    "source": [
+                        mapbox_overlay[0]
+                    ]
+                }
+            ])
+
+        return fig
 
 
     # app.clientside_callback(
@@ -482,35 +765,10 @@ def main(meters):
         Input("alert_id", "value")])
 
 
-    @app.callback(Output("map-graph", "figure"), [Input("mapbox_layer_dropdown", "value")])
-    def update_mapbox_layer(value):
-        current_map = copy.deepcopy(fig)
-        if value is None or len(value) == 0:
-            current_map.update_layout(
-                mapbox_layers=[
-                    {}
-                ])
-            return current_map
-        current_map.update_layout(
-            mapbox_layers=[
-                {
-                    "below": 'traces',
-                    "sourcetype": "raster",
-                    "sourceattribution": "United States Geological Survey",
-                    "source": [
-                        value[0]
-                    ]
-                }
-            ])
-        return current_map
-
-
     # Main graph -> individual graph
     @app.callback(Output("histogram", "figure"), [Input("map-graph", "clickData")])
     def make_individual_figure(main_graph_click):
-
         layout_individual = copy.deepcopy(layout)
-
         if main_graph_click is None:
             main_graph_click = {
                 "points": [
@@ -541,31 +799,15 @@ def main(meters):
                     name="Gas Produced (mcf)",
                     x=df_meter.index,
                     y=df_meter['Value'],
-                    line=dict(shape="spline", smoothing=2, width=1, color="#fac1b7"),
+                    line=dict(shape="spline", smoothing=1, width=1, color="#1254b0"),
                     marker=dict(symbol="diamond-open"),
-                ),
-                dict(
-                    type="scatter",
-                    mode="lines+markers",
-                    name="Oil Produced (bbl)",
-                    x=df_meter.index,
-                    y=df_meter['Value'],
-                    line=dict(shape="spline", smoothing=2, width=1, color="#a9bb95"),
-                    marker=dict(symbol="diamond-open"),
-                ),
-                dict(
-                    type="scatter",
-                    mode="lines+markers",
-                    name="Water Produced (bbl)",
-                    x=df_meter.index,
-                    y=df_meter['Value'],
-                    line=dict(shape="spline", smoothing=2, width=1, color="#92d8d8"),
-                    marker=dict(symbol="diamond-open"),
-                ),
+                    hovertemplate="%{x|%b-%d <br> %I:%M %p} <br> %{y}<extra></extra>",
+                )
             ]
             layout_individual["title"] = main_graph_click['points'][0]['text']
+            layout_individual["template"] = "plotly_dark"
 
-        figure = dict(data=data, layout=layout_individual)
+        figure = go.Figure(data=data, layout=layout_individual)
         return figure
 
 
@@ -574,7 +816,7 @@ def main(meters):
         Output('alert_id', 'options'),
         [Input('alert_type', 'value')])
     def set_alert_options(selected_type):
-        return [{'label': i, 'value': i} for i in alert_options[selected_type]]
+        return [{'label': i, 'value': i} for i in map_meter_options[selected_type]]
 
 
     # Triggered from "def set_alert_options" since it will send over all the options for a given type. The default
@@ -585,207 +827,139 @@ def main(meters):
     def set_alert_value(available_options):
         return available_options[0]['value']
 
+    @app.callback(
+        [Output('r4sparkline','figure'), Output('r30sparkline','figure')],
+        [Input("cnrfc_switch_span","n_clicks"), Input("r4sparkline", "figure"),
+         Input("cnrfc_switch_span_r30","n_clicks"), Input("r30sparkline", "figure")],
+    )
+    def R4_Graph(r4_n_clicks, r4figure, r30_n_clicks, r30figure):
+        ctx = dash.callback_context
+        today12z = datetime.now().strftime("%Y%m%d12")
+        yesterday12z = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d12")
+        file_dates = [yesterday12z, today12z]
+        df_cnrfc_list = []
+        layout = dict(
+            margin= dict(l=0, r=0, t=4, b=4, pad=0),
+            xaxis= dict(
+                showline=False,
+                showgrid=False,
+                zeroline=False,
+                showticklabels=False,
+            ),
+            yaxis= dict(
+                showline=False,
+                showgrid=False,
+                zeroline=False,
+                showticklabels=False,
+            ),
+            autosize= True,
+            paper_bgcolor= "rgba(0,0,0,0)",
+            plot_bgcolor= "rgba(0,0,0,0)",
+            showlegend= False,
+        )
 
-def getpidata(meters):
-    df_all = pd.DataFrame()
-    for meter in meters:
-        # Now that we have the url for the PI data, this request is for the actual data. We will
-        # download data from the beginning of the water year to the current date. (We can't download data
-        # past today's date, if we do we'll get an error.
-        try:
-            response = requests.get(
-                url=meter.url,
-                params={"startTime": (datetime.utcnow() + timedelta(hours=-1)).strftime("%Y-%m-%dT%H:00:00-00:00"),
-                        "endTime": datetime.utcnow().strftime("%Y-%m-%dT%H:00:00-00:00"),
-                        "interval": "1m",
-                        },
-            )
-            print('Response HTTP Status Code: {status_code}'.format(status_code=response.status_code))
-            j = response.json()
-
-            # We only want the "Items" object.
-            df_meter = pd.DataFrame.from_dict((j["Items"]))
-
-            # Convert the Timestamp to a pandas datetime object and convert to Pacific time.
-            df_meter.index = pd.to_datetime(df_meter.Timestamp)
-            df_meter.index.names = ['index']
-
-            # Remove any outliers or data spikes
-            #df_meter = drop_numerical_outliers(df_meter, meter, z_thresh=3)
-
-            # Rename the column (this was needed if we wanted to merge all the Value columns into a dataframe)
-            renamed_col = (f"{meter.meter_name}_{meter.attribute}").replace(' ', '_')
-            df_meter.rename(columns={"Value": f"{renamed_col}"}, inplace=True)
-
-            if df_all.empty:
-                df_all = df_meter
+        # No Clicks Yet (Initial Load)
+        if not ctx.triggered:
+            for file in file_dates:
+                try:
+                    df_cnrfc_list.append(pd.read_csv(f"https://www.cnrfc.noaa.gov/csv/{file}_american_csv_export.zip"))
+                except HTTPError as error:
+                    print(f'CNRFC HTTP Request failed {error} for {file}')
+            # No files were found and list is empty
+            if not df_cnrfc_list:
+                df_full = df_all.copy()
             else:
-                df_all = pd.merge(df_all, df_meter[["Timestamp", renamed_col]], on="Timestamp", how='outer')
+                # The last element in the list will be the most current forecast. Get that one.
+                df_cnrfc = df_cnrfc_list[-1].copy()
 
-        except requests.exceptions.RequestException:
-            print('HTTP Request failed')
-            return df_all
+                # Drop first row (the header is two rows and the 2nd row gets put into row 1 of the df; delete it)
+                df_cnrfc = df_cnrfc.iloc[1:]
 
+                # Convert the Timestamp to a pandas datetime object and convert to Pacific time.
+                df_cnrfc.GMT = pd.to_datetime(df_cnrfc.GMT).dt.tz_localize('UTC').dt.tz_convert('US/Pacific')
 
-# Build header
-def generate_metric_list_header():
-    return generate_metric_row(
-        "metric_header",
-        {"height": "3rem", "margin": "1rem 0", "textAlign": "center"},
-        {"id": "m_header_1", "children": html.Div("Parameter")},
-        {"id": "m_header_2", "children": html.Div("Count")},
-        {"id": "m_header_3", "children": html.Div("Sparkline")},
-        {"id": "m_header_4", "children": html.Div("OOC%")},
-        {"id": "m_header_5", "children": html.Div("%OOC")},
-        {"id": "m_header_6", "children": "Pass/Fail"},
-    )
+                df_cnrfc.rename(columns={"MFAC1L": "R20_fcst", "RUFC1": "R30_fcst", "MFPC1": "R4_fcst"}, inplace=True)
+                df_cnrfc[["R20_fcst", "R30_fcst", "R4_fcst"]] = df_cnrfc[["R20_fcst", "R30_fcst", "R4_fcst"]].apply(
+                    pd.to_numeric) * 1000
+                df_full = pd.merge(df_all, df_cnrfc[["GMT", "R20_fcst", "R30_fcst", "R4_fcst"]], left_on="Timestamp",
+                                   right_on="GMT", how='inner')
 
+            figR4 = go.Figure(
+                {
+                    "data": [
+                        {
+                            "x": df_full["Timestamp"],
+                            "y": df_full["R4_Flow"],
+                            "mode": "lines+markers",
+                            "name": "R4 Flow",
+                            "line": {"color": "#f4d44d"},
+                            "hovertemplate": "%{x|%b-%d <br> %I:%M %p} <br> %{y}<extra></extra>",
+                        }
+                    ],
+                    "layout": layout,
+                }
+            )
+            figR30 = go.Figure(
+                {
+                    "data": [
+                        {
+                            "x": df_full["Timestamp"],
+                            "y": df_full["R30_Flow"],
+                            "mode": "lines+markers",
+                            "name": "R30 Flow",
+                            "line": {"color": "#f4d44d"},
+                            "hovertemplate": "%{x|%b-%d <br> %I:%M %p} <br> %{y}<extra></extra>",
+                        }
+                    ],
+                    "layout": layout,
+                }
+            )
+            try:
+                figR4.add_scatter(x=df_cnrfc["GMT"], y=df_cnrfc["R4_fcst"], mode='lines', visible=False,
+                                hovertemplate="%{x|%b-%d <br> %I:%M %p} <br> %{y}<extra></extra>", )
+                figR30.add_scatter(x=df_cnrfc["GMT"], y=df_cnrfc["R30_fcst"], mode='lines', visible=False,
+                                  hovertemplate="%{x|%b-%d <br> %I:%M %p} <br> %{y}<extra></extra>", )
+            except:
+                print("CNRFC data unavail")
+            return figR4, figR30
 
-def generate_metric_row_helper(stopped_interval, index):
-    item = params[index]
+        toggle_id = ctx.triggered[0]['prop_id'].split('.')[0]
+        try:
+            # Toggle is on (since it starts "off", n_clicks will be an odd val when toggle is "on")
+            # R4 check
+            if r4_n_clicks % 2 and len(r4figure['data'])>0:
+                # Check to make sure the CNRFC data actually loaded. If it did, it will
+                # be trace1 in the data
+                r4figure['data'][1]['visible']=True
+            # Toggle is off
+            else:
+                if len(r4figure['data'])>0:
+                    r4figure['data'][1]['visible'] = False
 
-    div_id = item + suffix_row
-    button_id = item + suffix_button_id
-    sparkline_graph_id = item + suffix_sparkline_graph
-    count_id = item + suffix_count
-    ooc_percentage_id = item + suffix_ooc_n
-    ooc_graph_id = item + suffix_ooc_g
-    indicator_id = item + suffix_indicator
-
-    return generate_metric_row(
-        div_id,
-        None,
-        {
-            "id": item,
-            "className": "metric-row-button-text",
-            "children": html.Button(
-                id=button_id,
-                className="metric-row-button",
-                children=item,
-                title="Click to visualize live SPC chart",
-                n_clicks=0,
-            ),
-        },
-        {"id": count_id, "children": "0"},
-        {
-            "id": item + "_sparkline",
-            "children": dcc.Graph(
-                id=sparkline_graph_id,
-                style={"width": "100%", "height": "95%"},
-                config={
-                    "staticPlot": False,
-                    "editable": False,
-                    "displayModeBar": False,
-                },
-                figure=go.Figure(
-                    {
-                        "data": [
-                            {
-                                "x": state_dict["Batch"]["data"].tolist()[
-                                     :stopped_interval
-                                     ],
-                                "y": state_dict[item]["data"][:stopped_interval],
-                                "mode": "lines+markers",
-                                "name": item,
-                                "line": {"color": "#f4d44d"},
-                            }
-                        ],
-                        "layout": {
-                            "uirevision": True,
-                            "margin": dict(l=0, r=0, t=4, b=4, pad=0),
-                            "xaxis": dict(
-                                showline=False,
-                                showgrid=False,
-                                zeroline=False,
-                                showticklabels=False,
-                            ),
-                            "yaxis": dict(
-                                showline=False,
-                                showgrid=False,
-                                zeroline=False,
-                                showticklabels=False,
-                            ),
-                            "paper_bgcolor": "rgba(0,0,0,0)",
-                            "plot_bgcolor": "rgba(0,0,0,0)",
-                        },
-                    }
-                ),
-            ),
-        },
-        {"id": ooc_percentage_id, "children": "0.00%"},
-        {
-            "id": ooc_graph_id + "_container",
-            "children": daq.GraduatedBar(
-                id=ooc_graph_id,
-                color={"gradient":True,"ranges":{"green":[0,30],"yellow":[30,70],"red":[70,100]}},
-                showCurrentValue=True,
-                max=100,
-                value=50,
-            ),
-        },
-        {
-            "id": item + "_pf",
-            "children": daq.Indicator(
-                id=indicator_id, value=True, color="#91dfd2", size=12
-            ),
-        },
-    )
+            # R30 checks
+            if r30_n_clicks % 2 and len(r30figure['data'])>0:
+                # Check to make sure the CNRFC data actually loaded. If it did, it will
+                # be trace1 in the data
+                r30figure['data'][1]['visible']=True
+            # Toggle is off
+            else:
+                if len(r30figure['data'])>0:
+                    r30figure['data'][1]['visible'] = False
+            return r4figure, r30figure
+        except IndexError:
+            print("CNRFC plot not loaded")
+            return r4figure, r30figure
 
 
-def generate_metric_row(id, style, col1, col2, col3, col4, col5, col6):
-    if style is None:
-        style = {"height": "8rem", "width": "100%"}
 
-    return html.Div(
-        id=id,
-        className="row metric-row",
-        style=style,
-        children=[
-            html.Div(
-                id=col1["id"],
-                className="col-1",
-                style={"margin-right": "2.5rem", "minWidth": "50px"},
-                children=col1["children"],
-            ),
-            html.Div(
-                id=col2["id"],
-                style={"textAlign": "center"},
-                className="col-1",
-                children=col2["children"],
-            ),
-            html.Div(
-                id=col3["id"],
-                style={"height": "100%"},
-                className="col-4",
-                children=col3["children"],
-            ),
-            html.Div(
-                id=col4["id"],
-                style={},
-                className="col-1",
-                children=col4["children"],
-            ),
-            html.Div(
-                id=col5["id"],
-                style={"height": "100%", "margin-top": "5rem"},
-                className="col-3",
-                children=col5["children"],
-            ),
-            html.Div(
-                id=col6["id"],
-                style={"display": "flex", "justifyContent": "center"},
-                className="col-1",
-                children=col6["children"],
-            ),
-        ],
-    )
 main(None)
 
 if __name__ == '__main__':
     meters = [PiRequest("R4", "Flow"), PiRequest("R11", "Flow"),
               PiRequest("R30", "Flow"), PiRequest("Afterbay", "Elevation"),
               PiRequest("Afterbay", "Elevation Setpoint"),
-              PiRequest("Middle Fork", "Power - (with Ralston)")]
+              PiRequest("Middle Fork", "Power - (with Ralston)"),
+              PiRequest("Oxbow", "Power")]
     app.run_server(debug=True)
     main(meters)
 

@@ -19,20 +19,29 @@ t1 = Timeloop()
 class PiRequest:
     #
     # https://flows.pcwa.net/piwebapi/assetdatabases/D0vXCmerKddk-VtN6YtBmF5A8lsCue2JtEm2KAZ4UNRKIwQlVTSU5FU1NQSTJcT1BT/elements
-    def __init__(self, meter_name, attribute):
-        self.meter_name = meter_name  # R4, Afterbay, Ralston
-        self.attribute = attribute  # Flow, Elevation, Lat, Lon, Storage, Elevation Setpoint, Gate 1 Position, Generation
+    def __init__(self, db, meter_name, attribute):
+        self.db = db                    # Database (e.g. "Energy Marketing," "OPS")
+        self.meter_name = meter_name    # R4, Afterbay, Ralston
+        self.attribute = attribute      # Flow, Elevation, Lat, Lon, Storage, Elevation Setpoint, Gate 1 Position, Generation
         self.baseURL = 'https://flows.pcwa.net/piwebapi/attributes'
         self.meter_element_type = self.meter_element_type()  # Gauging Stations, Reservoirs, Generation Units
         self.url = self.url()
 
     def url(self):
         try:
-            response = requests.get(
-                url="https://flows.pcwa.net/piwebapi/attributes",
-                params={"path": f"\\\\BUSINESSPI2\\OPS\\{self.meter_element_type}\\{self.meter_name}|{self.attribute}",
+            if self.db == "Energy_Marketing":
+                response = requests.get(
+                    url="https://flows.pcwa.net/piwebapi/attributes",
+                    params={
+                        "path": f"\\\\BUSINESSPI2\\{self.db}\\Misc Tags|{self.attribute}",
                         },
-            )
+                )
+            else:
+                response = requests.get(
+                    url="https://flows.pcwa.net/piwebapi/attributes",
+                    params={"path": f"\\\\BUSINESSPI2\\{self.db}\\{self.meter_element_type}\\{self.meter_name}|{self.attribute}",
+                            },
+                )
             j = response.json()
             url_flow = j['Links']['InterpolatedData']
             return url_flow
@@ -42,6 +51,8 @@ class PiRequest:
             return None
 
     def meter_element_type(self):
+        if not self.meter_name:
+            return None
         if self.attribute == "Flow":
             return "Gauging Stations"
         if "Afterbay" in self.meter_name:
@@ -51,7 +62,14 @@ class PiRequest:
 
 
 @t1.job(interval=timedelta(minutes=1))
-def main(meters):
+def main():
+    meters = [PiRequest("OPS", "R4", "Flow"), PiRequest("OPS", "R11", "Flow"),
+              PiRequest("OPS", "R30", "Flow"), PiRequest("OPS", "Afterbay", "Elevation"),
+              PiRequest("OPS", "Afterbay", "Elevation Setpoint"),
+              PiRequest("OPS", "Middle Fork", "Power - (with Ralston)"),
+              PiRequest("Energy_Marketing", None, "ADS_MDFK_and_RA"),
+              PiRequest("Energy_Marketing", None, "ADS_Oxbow"),
+              PiRequest("Energy_Marketing", None, "Oxbow_Forecast")]
     df_all = pd.DataFrame()
     for meter in meters:
         # Now that we have the url for the PI data, this request is for the actual data. We will
@@ -259,9 +277,5 @@ def drop_numerical_outliers(df, meter, z_thresh):
 
 if __name__ == "__main__":
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'AbayTracker.settings')
-    meters = [PiRequest("R4", "Flow"), PiRequest("R11", "Flow"),
-              PiRequest("R30", "Flow"), PiRequest("Afterbay", "Elevation"),
-              PiRequest("Afterbay", "Elevation Setpoint"),
-              PiRequest("Middle Fork", "Power - (with Ralston)")]
-    main(meters)
+    main()
     t1.start(block=True)
