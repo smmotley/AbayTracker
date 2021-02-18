@@ -190,7 +190,7 @@ def alarm_checker(meter, df, column_name):
         # If the float has changed, we want to alert all users; so the users param will include everyone that has
         # set up an alert profile (basically everyone).
         if abay_float_changed:
-            update_alertDB(users=AlertPrefs.objects.get('user_id'),
+            update_alertDB(users=AlertPrefs.objects.all(),
                            alarm_trigger="Afterbay_Float",
                            trigger_value=int(abay_float))
 
@@ -227,6 +227,7 @@ def update_alertDB(users, alarm_trigger, trigger_value):
                 'trigger_time': datetime.utcnow(),
                 'trigger_value': trigger_value,
                 'alarm_sent': False,
+                'seen_on_website': False,
             },
         )
     return
@@ -238,10 +239,11 @@ def send_alerts():
             user_profile = Profile.objects.get(user__id=alert.user_id)
             user_phone = user_profile.phone_number
             user_email = user_profile.user.email
+            pretty_name = (alert.alarm_trigger.split('_')[0]).upper()
             email_body = f"{alert.alarm_trigger} triggered this alert \n" \
                          f"Current Value: {alert.trigger_value} \n" \
                          f"Your threshold: {alert.alarm_setpoint}"
-            email_subject = f"PCWA Alarm For {alert.alarm_trigger}"
+            email_subject = f"PCWA Alarm For {pretty_name}"
             send_mail(user_phone, user_email, email_body, email_subject)
             Issued_Alarms.objects.filter(id=alert.id).update(alarm_sent=True)
     return

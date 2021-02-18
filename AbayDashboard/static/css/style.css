@@ -2057,6 +2057,18 @@ html:not([dir=rtl]) .c-switch-label .c-switch-slider::after {
     border-radius:0
 }
 
+.dot {
+  height: 20px;
+  width: 20px;
+  margin-top: 15px;
+  background-color: #1a5ec6;
+  border-radius: 50%;
+  display: inline-block;
+  box-shadow: 0 0 10px 0 #0337f4;
+}
+
+
+
 
 
 

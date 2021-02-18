@@ -8,7 +8,7 @@
      <title>Abay Dashboard</title>
      <!--Import Google Icon Font For Materialize-->
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
-    <link href="https://use.fontawesome.com/releases/v5.0.6/css/all.css" rel="stylesheet">
+    <link href="https://use.fontawesome.com/releases/v5.14.0/css/all.css" rel="stylesheet">
       <!-- Compiled and minified CSS -->
 
 
@@ -101,9 +101,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // This will remove the side bar if screensize is changed, but it will also allow for the toggle
     // to work, when the screen size is set (i.e. when the user stops moving it).
+    var $pw = $(".page-wrapper")
     $(window).resize(function() {
     // This will execute whenever the window is resized
-        var $pw = $(".page-wrapper")
        if($(window).width()<768){
            if($pw.hasClass("toggled")) {
                $(".page-wrapper").removeClass("toggled");
@@ -115,6 +115,12 @@ document.addEventListener('DOMContentLoaded', function() {
            }
        }
     });
+    let inital_width = $(window).width()
+    if (inital_width<768){
+        if($pw.hasClass("toggled")) {
+               $(".page-wrapper").removeClass("toggled");
+           }
+    }
 })
 
 

@@ -14,12 +14,13 @@ import numpy as np
 from django.contrib.staticfiles.storage import staticfiles_storage
 from dash.dependencies import Input, Output, State
 from plotly import graph_objs as go
-from plotly.graph_objs import *
 from datetime import datetime as dt
 from django_plotly_dash import DjangoDash
 import dash_bootstrap_components as dbc
 from htexpr import compile
 import dash_daq as daq
+from scipy import stats
+import json
 
 # ###To run the app on it's own (not in Django), you would do:
 # app = dash.Dash()
@@ -72,12 +73,12 @@ class PiRequest:
         try:
             response = requests.get(
                 url=self.url,
-                params={"startTime": (datetime.utcnow() + timedelta(hours=-24)).strftime("%Y-%m-%dT%H:00:00-00:00"),
-                        "endTime": datetime.utcnow().strftime("%Y-%m-%dT%H:00:00-00:00"),
-                        "interval": "1h",
+                params={"startTime": (datetime.utcnow() + timedelta(hours=-24)).strftime("%Y-%m-%dT%H:%M:00-00:00"),
+                        "endTime": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:00-00:00"),
+                        "interval": "1m",
                         },
             )
-            print('Response HTTP Status Code: {status_code}'.format(status_code=response.status_code))
+            print(f'Response HTTP Status Code: {response.status_code} for {self.meter_name} | {self.attribute}')
             j = response.json()
             # We only want the "Items" object.
             return j["Items"]
@@ -114,40 +115,14 @@ mapbox_access_token = "pk.eyJ1Ijoic21vdGxleSIsImEiOiJuZUVuMnBBIn0.xce7KmFLzFd9PZ
 
 
 def main(meters):
-    meters = [PiRequest("R4", "Flow"), PiRequest("R11", "Flow"),
-              PiRequest("R30", "Flow"), PiRequest("Afterbay", "Elevation"),
-              PiRequest("Afterbay", "Elevation Setpoint"),
-              PiRequest("Middle Fork", "Power - (with Ralston)"), PiRequest("Oxbow", "Power")]
-
     # This will store the data for all the PI requests
-    df_all = pd.DataFrame()
-    for meter in meters:
-        try:
-            df_meter = pd.DataFrame.from_dict(meter.data)
+    df_all, df_cnrfc = update_data(meters, None)
 
-            # If there was an error getting the data, you will have an empty dataframe, escape for loop
-            if df_meter.empty:
-                return None
+    # This is for the abay levels. We're just going to show the data on an hourly basis.
+    df_hourly_resample = df_all.resample('60min', on='Timestamp').mean()
 
-            # Convert the Timestamp to a pandas datetime object and convert to Pacific time.
-            df_meter.Timestamp = pd.to_datetime(df_meter.Timestamp).dt.tz_convert('US/Pacific')
-            df_meter.index = df_meter.Timestamp
-            df_meter.index.names = ['index']
-
-            # Rename the column (this was needed if we wanted to merge all the Value columns into a dataframe)
-            renamed_col = (f"{meter.meter_name}_{meter.attribute}").replace(' ', '_')
-            df_meter.rename(columns={"Value": f"{renamed_col}"}, inplace=True)
-
-            if df_all.empty:
-                df_all = df_meter
-            else:
-                df_all = pd.merge(df_all, df_meter[["Timestamp", renamed_col]], on="Timestamp", how='outer')
-
-
-        except ValueError:
-            print('Pandas Dataframe May Be Empty')
-            return None
-
+    # Since the data contain CNRFC data, which contains forecast data, remove all the nan values
+    # which will basically give us a dataframe only with current PI data.
 
     locations_types = df.type.unique()
     mapbox_layers = {
@@ -186,7 +161,7 @@ def main(meters):
         # col-lg-3: take up 3 columns (25% of the row) for large screens
         # mb-3: margin-bottom of 3: 1 rem (e.g. 16px if font-size is 16)
         # pr-md-2: padding-right for medium-size screens or larger is 2: 0.5 rem or 8px if fontsize is 16px
-        dbc.Col(
+        html.Div([
             # ABAY CARD class of h-md-100 which means height on medium screens of 100%
             dbc.Card([
             dbc.CardHeader(f"Abay - "
@@ -216,6 +191,7 @@ def main(meters):
                     dbc.Col(
                         dcc.Graph(
                             className="sparkline_graph",
+                            id="abay_bargraph",
                             style={"width": "100%", "height": "100%"},
                             config={
                                 "staticPlot": False,
@@ -225,8 +201,8 @@ def main(meters):
                             figure={
                                     "data": [
                                         {
-                                            "x": df_all['Timestamp'][-10:],
-                                            "y": df_all['Afterbay_Elevation'][-10:],
+                                            "x": df_hourly_resample.index[-10:],
+                                            "y": df_hourly_resample['Afterbay_Elevation'][-10:],
                                             "type": "bar",
                                             "name": "Elevation",
                                             "marker":{"color":'#2c7be5'},
@@ -238,8 +214,9 @@ def main(meters):
                                             #"width":"1.5",
                                         },
                                         {
-                                            "x": df_all['Timestamp'][-10:],
-                                            "y": df_all['Afterbay_Elevation_Setpoint'][-10:] - df_all["Afterbay_Elevation"][-10:],
+                                            "x": df_hourly_resample.index[-10:],
+                                            "y": df_hourly_resample['Afterbay_Elevation_Setpoint'][-10:] -
+                                                 df_hourly_resample["Afterbay_Elevation"][-10:],
                                             "type": "bar",
                                             "name": "Space",
                                             "marker": {"color": '#061325'},
@@ -286,10 +263,10 @@ def main(meters):
                 ]),
                 className='align-items-end'
             )
-            ], color="dark", inverse=True, className="h-100"),
-            className="col-sm-12 col-md-6 col-lg-3 mb-3 pr-md-2"
+            ], color="dark", inverse=True, className="h-100")],
+            className="col-sm-12 col-md-12 col-lg-3 mb-3 pr-md-2"
         ),
-        dbc.Col(
+        html.Div([
             dbc.Card([
                 dbc.CardHeader("MF+RA Gen vs Scheduled"),
                 dbc.CardBody(
@@ -323,7 +300,7 @@ def main(meters):
                                             {
                                                 "x": df_all["Timestamp"],
                                                 "y": df_all["Middle_Fork_Power_-_(with_Ralston)"],
-                                                "mode": "lines+markers",
+                                                "mode": "lines",
                                                 "name": "MFPH",
                                                 "line": {"color": "#f4d44d"},
                                                 "hovertemplate": "%{x|%b-%d <br> %I:%M %p} <br> %{y:.1f}<extra></extra>",
@@ -365,7 +342,7 @@ def main(meters):
                                             {
                                                 "x": df_all["Timestamp"],
                                                 "y": df_all["Oxbow_Power"],
-                                                "mode": "lines+markers",
+                                                "mode": "lines",
                                                 "name": "Oxbow",
                                                 "line": {"color": "#f4d44d"},
                                                 "hovertemplate": "%{x|%b-%d <br> %I:%M %p} <br> %{y:.1f}<extra></extra>",
@@ -397,10 +374,10 @@ def main(meters):
                 ],
                     className="flex-grow-1"),
                     className='d-flex align-items-end')
-            ], color="dark", inverse=True, className='h-100'),
-            className="col-sm-12 col-md-6 col-lg-3 mb-3 pr-md-2"
+            ], color="dark", inverse=True, className='h-100')],
+            className="col-sm-12 col-md-12 col-lg-3 mb-3 pr-md-2"
         ),
-        dbc.Col(
+        html.Div([
             dbc.Card([
                 dbc.CardHeader(
                                children=[
@@ -428,7 +405,8 @@ def main(meters):
                                )]
                                ),
                 dbc.CardBody(
-                    dbc.Row([
+                    children=[
+                        dbc.Row([
                     dbc.Col(
                         daq.LEDDisplay(
                             size=20,
@@ -438,25 +416,40 @@ def main(meters):
                         ),
                     width=3),
                     dbc.Col(
-                        dcc.Graph(
-                            id="r4sparkline",
-                            className="sparkline_graph h-100",
-                            config={
-                                "staticPlot": False,
-                                "editable": False,
-                                "displayModeBar": False,
-                            },
-                            figure=go.Figure(
-                            ),
+                        dcc.Loading(
+                            id='loading_r4_sparkline',
+                            type="circle",
+                            className='h-100',
+                            parent_className="loading_wrapper h-100",
+                            children=[
+                                dcc.Graph(
+                                    id="r4sparkline",
+                                    # Parent div of the figure must have a height or it will base height on
+                                    # container.
+                                    style={"height":120},
+                                    className="sparkline_graph",
+                                    config={
+                                        "staticPlot": False,
+                                        "editable": False,
+                                        "displayModeBar": False,
+                                    },
+                                    figure=go.Figure(),
+                                )]
                         ), width=9, className='sparkline'
                     )
-                ], className="h-100"
-                    ),
-                )
-            ], color="dark", className="h-100", inverse=True),
-            className="col-sm-12 col-md-6 col-lg-3 mb-3 pr-md-2"
+                ], className="h-100"),
+                        html.Div(
+                            "TIMESTAMP",
+                            id="cnrfc_timestamp_r4",
+                            style={"background-color": "gray",
+                                   "position": "absolute",
+                                   "left": "0px", "right": "0px", "bottom": "0px"})
+                    ]
+                ),
+            ], color="dark", className="h-100", inverse=True)],
+            className="col-sm-12 col-md-12 col-lg-3 mb-3 pr-md-2"
         ),
-        dbc.Col(
+        html.Div([
             dbc.Card([
                 dbc.CardHeader(children=[
                                 "R30 Flow",
@@ -493,56 +486,25 @@ def main(meters):
                     ),
                     dbc.Col(
                         dcc.Graph(
-                            className="sparkline_graph h-100",
+                            className="sparkline_graph",
                             id="r30sparkline",
+                            # Parent div of the figure must have a height or it will base height on
+                            # container.
+                            style={"height":120},
                             config={
                                 "staticPlot": False,
                                 "editable": False,
                                 "displayModeBar": False,
                             },
-                            figure=go.Figure(
-                                {
-                                    "data": [
-                                        {
-                                            "x": df_all["Timestamp"],
-                                            "y": df_all["R30_Flow"],
-                                            "mode": "lines+markers",
-                                            "name": "something",
-                                            "line": {"color": "#f4d44d"},
-                                            "hovertemplate": "%{x|%b-%d <br> %I:%M %p} <br> %{y:.1f}<extra></extra>",
-                                        }
-                                    ],
-                                    "layout": {
-                                        "margin": dict(l=0, r=0, t=4, b=4, pad=0),
-                                        "xaxis": dict(
-                                            showline=False,
-                                            showgrid=False,
-                                            zeroline=False,
-                                            showticklabels=False,
-                                        ),
-                                        "yaxis": dict(
-                                            showline=False,
-                                            showgrid=False,
-                                            zeroline=False,
-                                            showticklabels=False,
-                                        ),
-                                        "autosize": True,
-                                        "paper_bgcolor": "rgba(0,0,0,0)",
-                                        "plot_bgcolor": "rgba(0,0,0,0)",
-                                    },
-                                }
-                            ),
+                            figure=go.Figure(),
                         ), width=9, className='sparkline'
                     )
                 ], className="h-100"
                     ),
                 )
-            ], color="dark", inverse=True, className='h-100'),
-            className="col-sm-12 col-md-6 col-lg-3 mb-3 pr-md-2"
+            ], color="dark", inverse=True, className='h-100')],
+            className="col-sm-12 col-md-12 col-lg-3 mb-3 pr-md-2"
         )
-        #dbc.Col(dbc.Card(card_content, color="dark", inverse=True)),
-        #dbc.Col(dbc.Card(card_content, color="dark", inverse=True)),
-        #dbc.Col(dbc.Card(card_content, color="dark", inverse=True)),
         ],
         className='top-cards no-gutters'
     )
@@ -553,7 +515,7 @@ def main(meters):
         children=[
             top_row_cards,
             dbc.Row([html.Div(
-                className="div-for-dropdown ml-2 col-sm-2 col-md-4 col-lg-4",
+                className="div-for-dropdown ml-2 col-sm-4 col-md-4 col-lg-4",
                 children=[
                     dcc.DatePickerSingle(
                         id="date-picker",
@@ -567,7 +529,7 @@ def main(meters):
             ),
                 # Change to side-by-side for mobile layout
                 html.Div(
-                    className="div-for-dropdown ml-2 col-sm-2 col-md-3 col-lg-3",
+                    className="div-for-dropdown ml-2 col-sm-4 col-md-4 col-lg-3",
                     children=[
                         # Dropdown for locations on map
                         dcc.Dropdown(
@@ -581,7 +543,7 @@ def main(meters):
                     ],
                 ),
                 html.Div(
-                    className="div-for-dropdown col-sm-2 col-md-3 col-lg-3",
+                    className="div-for-dropdown col-sm-3 col-md-3 col-lg-3",
                     children=[
                         # Dropdown to select times
                         dcc.Dropdown(
@@ -598,9 +560,9 @@ def main(meters):
                         )
                     ],
                 ),
-            ], className="col-6 no-gutters"),
-            dbc.Row([dbc.Col(dcc.Graph(id="map-graph"), className='col-sm-12 col-md-12 col-lg-6 mb-3 pr-md-2'),
-                     dbc.Col(dcc.Loading(
+            ], className="col-lg-6 col-md-12 col-sm-12 no-gutters"),
+            dbc.Row([html.Div([dcc.Graph(id="map-graph")], className='col-sm-12 col-md-12 col-lg-6 mb-3 pr-md-2'),
+                     html.Div(dcc.Loading(
                                 id='loading_graph',
                                 parent_className='loading_wrapper',
                                 children=[html.Div([dcc.Graph(id="histogram")])],
@@ -609,6 +571,18 @@ def main(meters):
                             )
             ], className="no-gutters"),
             html.Div(id='dummy-output'),
+            html.Div(id='dummy-output-timer'),
+            # This div will store our dataframe with all the PI data. It's a way for the
+            # callbacks to share data
+            html.Div(id='dummy-dataframe', style={'display':'none'}),
+            html.Div(id='dummy-rfc-dataframe', style={'display': 'none'}),
+            # This is a dummy id to allow the app to perform an update at a given interval
+            dcc.Interval(
+                id='interval-component',
+                interval=1 * 60000,  # in milliseconds (60 seconds)
+                #max_intervals=0,
+                n_intervals=0
+            ),
         ]
     )
 
@@ -624,10 +598,33 @@ def main(meters):
         df_meter.index = pd.to_datetime(df_meter.Timestamp).dt.tz_convert('US/Pacific')
         return df_meter
 
+    @app.callback([Output(component_id='dummy-dataframe', component_property='children'),
+                   Output(component_id='dummy-rfc-dataframe', component_property='children')],
+                [Input('interval-component', 'n_intervals'),Input('dummy-rfc-dataframe', 'children')])
+    def get_new_data(value, current_rfc_df):
+        df_refresh, df_refresh_rfc = update_data(meters, current_rfc_df)
+        return df_refresh.to_json(date_format='iso',orient='index'), \
+               df_refresh_rfc.to_json(date_format='iso',orient='index')
+
+
 
     @app.callback(Output("loading_output", "children"), [Input("map-graph", "hoverData")])
     def input_triggers_spinner(value):
         return
+
+
+    app.clientside_callback(
+        """
+        function(n_intervals){
+            var n = Date.now()
+            var pretty_date = d3.timeFormat("%I:%M %p")
+            $("#updated_time").text(pretty_date(n))
+            return 
+        }
+        """,
+        Output(component_id='dummy-output-timer', component_property='children'),
+        [Input('interval-component', 'n_intervals'),]
+    )
 
 
     @app.callback(
@@ -772,7 +769,7 @@ def main(meters):
         if main_graph_click is None:
             main_graph_click = {
                 "points": [
-                    {"curveNumber": 4, "pointNumber": 1, "text": "MF AR Above Interbay"}
+                    {"curveNumber": 1, "pointNumber": 6, "text": "MIDDLE FORK AMERICAN RIVER NR FORESTHILL"}
                 ]
             }
 
@@ -795,7 +792,7 @@ def main(meters):
             data = [
                 dict(
                     type="scatter",
-                    mode="lines+markers",
+                    mode="lines",
                     name="Gas Produced (mcf)",
                     x=df_meter.index,
                     y=df_meter['Value'],
@@ -830,59 +827,68 @@ def main(meters):
     @app.callback(
         [Output('r4sparkline','figure'), Output('r30sparkline','figure')],
         [Input("cnrfc_switch_span","n_clicks"), Input("r4sparkline", "figure"),
-         Input("cnrfc_switch_span_r30","n_clicks"), Input("r30sparkline", "figure")],
+         Input("cnrfc_switch_span_r30","n_clicks"), Input("r30sparkline", "figure"),
+         Input("dummy-dataframe","children"), Input("dummy-rfc-dataframe","children"),
+         Input('interval-component', 'n_intervals')
+         ],
     )
-    def R4_Graph(r4_n_clicks, r4figure, r30_n_clicks, r30figure):
+    def flow_sparklines(r4_n_clicks, r4figure, r30_n_clicks, r30figure,
+                        json_data, rfc_json_data, n_intervals):
+        '''
+        Purpose: This function will be triggered in one of two ways:
+                 (1) Interval update: This will completely redraw the graph by ingesting the info in the dummy div.
+                                      The function knows the request is not coming from a click.
+                 (2) Click: The idea here is that the data are already loaded, therefore it's faster if the
+                            graph isn't redrawn, but rather updated with the CNRFC line added or removed.
+                            Not sure if this is actually faster or not.
+        :param r4_n_clicks:     Number of clicks from the toggle (even = on, odd = off)
+        :param r4figure:        Graph data for r4
+        :param r30_n_clicks:    Number of clicks from toggle (even = on, odd = off)
+        :param r30figure:       Graph data for r30
+        :param json_data:       PI data in json format from the dummy-dataframe div
+        :param rfc_json_data:   cnrfc data in json format from dummy-rfc-dataframe div
+        :param n_intervals:     number of times the interval has been triggered.
+        :return:                Returns the r4 and r30 figure.
+        '''
         ctx = dash.callback_context
-        today12z = datetime.now().strftime("%Y%m%d12")
-        yesterday12z = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d12")
-        file_dates = [yesterday12z, today12z]
-        df_cnrfc_list = []
-        layout = dict(
-            margin= dict(l=0, r=0, t=4, b=4, pad=0),
-            xaxis= dict(
-                showline=False,
-                showgrid=False,
-                zeroline=False,
-                showticklabels=False,
-            ),
-            yaxis= dict(
-                showline=False,
-                showgrid=False,
-                zeroline=False,
-                showticklabels=False,
-            ),
-            autosize= True,
-            paper_bgcolor= "rgba(0,0,0,0)",
-            plot_bgcolor= "rgba(0,0,0,0)",
-            showlegend= False,
-        )
 
-        # No Clicks Yet (Initial Load)
-        if not ctx.triggered:
-            for file in file_dates:
-                try:
-                    df_cnrfc_list.append(pd.read_csv(f"https://www.cnrfc.noaa.gov/csv/{file}_american_csv_export.zip"))
-                except HTTPError as error:
-                    print(f'CNRFC HTTP Request failed {error} for {file}')
-            # No files were found and list is empty
-            if not df_cnrfc_list:
-                df_full = df_all.copy()
-            else:
-                # The last element in the list will be the most current forecast. Get that one.
-                df_cnrfc = df_cnrfc_list[-1].copy()
+        # The ID triggering the callback
+        toggle_id = ctx.triggered[0]['prop_id'].split('.')[0]
 
-                # Drop first row (the header is two rows and the 2nd row gets put into row 1 of the df; delete it)
-                df_cnrfc = df_cnrfc.iloc[1:]
+        # Is this an initial load or an update sent by interval update
+        if toggle_id == 'dummy-dataframe' or toggle_id == 'interval-component':      # Call back not hit by switch, redraw graph
+            layout = dict(
+                margin= dict(l=0, r=0, t=4, b=4, pad=0),
+                xaxis= dict(
+                    showline=False,
+                    showgrid=False,
+                    zeroline=False,
+                    showticklabels=False,
+                ),
+                yaxis= dict(
+                    showline=False,
+                    showgrid=False,
+                    zeroline=False,
+                    showticklabels=False,
+                ),
+                autosize= True,
+                paper_bgcolor= "rgba(0,0,0,0)",
+                plot_bgcolor= "rgba(0,0,0,0)",
+                showlegend= False,
+            )
 
-                # Convert the Timestamp to a pandas datetime object and convert to Pacific time.
-                df_cnrfc.GMT = pd.to_datetime(df_cnrfc.GMT).dt.tz_localize('UTC').dt.tz_convert('US/Pacific')
+            # Get the data stored in the 'dummy-dataframe' div. This should already be loaded
+            try:
+                df_full = pd.read_json(json_data, orient='index')
+                df_full.Timestamp = df_full['Timestamp'].dt.tz_convert('US/Pacific')
 
-                df_cnrfc.rename(columns={"MFAC1L": "R20_fcst", "RUFC1": "R30_fcst", "MFPC1": "R4_fcst"}, inplace=True)
-                df_cnrfc[["R20_fcst", "R30_fcst", "R4_fcst"]] = df_cnrfc[["R20_fcst", "R30_fcst", "R4_fcst"]].apply(
-                    pd.to_numeric) * 1000
-                df_full = pd.merge(df_all, df_cnrfc[["GMT", "R20_fcst", "R30_fcst", "R4_fcst"]], left_on="Timestamp",
-                                   right_on="GMT", how='inner')
+                df_cnrfc = pd.read_json(rfc_json_data, orient='index')
+                df_cnrfc.GMT = pd.to_datetime(df_cnrfc.GMT).dt.tz_convert('US/Pacific')
+
+            # If it's not loaded, reload it.
+            except ValueError:
+                print("DATA NOT FOUND, RELOADING. PLEASE CHECK WHY")
+                df_full, df_cnrfc = update_data(meters, rfc_json_data)
 
             figR4 = go.Figure(
                 {
@@ -890,7 +896,7 @@ def main(meters):
                         {
                             "x": df_full["Timestamp"],
                             "y": df_full["R4_Flow"],
-                            "mode": "lines+markers",
+                            "mode": "lines",
                             "name": "R4 Flow",
                             "line": {"color": "#f4d44d"},
                             "hovertemplate": "%{x|%b-%d <br> %I:%M %p} <br> %{y}<extra></extra>",
@@ -905,7 +911,7 @@ def main(meters):
                         {
                             "x": df_full["Timestamp"],
                             "y": df_full["R30_Flow"],
-                            "mode": "lines+markers",
+                            "mode": "lines",
                             "name": "R30 Flow",
                             "line": {"color": "#f4d44d"},
                             "hovertemplate": "%{x|%b-%d <br> %I:%M %p} <br> %{y}<extra></extra>",
@@ -915,14 +921,29 @@ def main(meters):
                 }
             )
             try:
-                figR4.add_scatter(x=df_cnrfc["GMT"], y=df_cnrfc["R4_fcst"], mode='lines', visible=False,
+                cnrfc_r4_visible = False
+                cnrfc_r30_visible = False
+                if r4_n_clicks % 2 and len(r4figure['data'])>0:
+                    # Check to make sure the CNRFC data actually loaded. If it did, it will
+                    # be trace1 in the data
+                    cnrfc_r4_visible= True
+                    # R30 checks
+                if r30_n_clicks % 2 and len(r30figure['data']) > 0:
+                    # Check to make sure the CNRFC data actually loaded. If it did, it will
+                    # be trace1 in the data
+                    cnrfc_r30_visible = True
+                figR4.add_scatter(x=df_cnrfc["GMT"], y=df_cnrfc["R4_fcst"], mode='lines',
+                                  visible=cnrfc_r4_visible,
                                 hovertemplate="%{x|%b-%d <br> %I:%M %p} <br> %{y}<extra></extra>", )
-                figR30.add_scatter(x=df_cnrfc["GMT"], y=df_cnrfc["R30_fcst"], mode='lines', visible=False,
+                figR30.add_scatter(x=df_cnrfc["GMT"], y=df_cnrfc["R30_fcst"], mode='lines',
+                                   visible=cnrfc_r30_visible,
                                   hovertemplate="%{x|%b-%d <br> %I:%M %p} <br> %{y}<extra></extra>", )
             except:
                 print("CNRFC data unavail")
             return figR4, figR30
 
+        # Not initial load and triggered via user toggle switch. It's possible this entire section could be
+        # removed and you could just redraw the graph just as quickly every time.
         toggle_id = ctx.triggered[0]['prop_id'].split('.')[0]
         try:
             # Toggle is on (since it starts "off", n_clicks will be an odd val when toggle is "on")
@@ -950,17 +971,136 @@ def main(meters):
             print("CNRFC plot not loaded")
             return r4figure, r30figure
 
+    # Interval update for Abay graphs
+    @app.callback(
+        [Output('my-tank2', 'value'), Output('my-tank2', 'max'), Output("abay_bargraph", 'figure')],
+        [Input("dummy-dataframe", "children"), Input("abay_bargraph", "figure"),
+         Input('interval-component', 'n_intervals')],
+    )
+    def abay_graphs(json_data, figure, n_intervals):
+        df_full = pd.read_json(json_data, orient='index')
+        df_full.Timestamp = df_full['Timestamp'].dt.tz_convert('US/Pacific')
+        value = round(df_full["Afterbay_Elevation"].iloc[-1], 1),
+        max = df_full["Afterbay_Elevation_Setpoint"].values.max()
+
+        df_full_hourly = df_full.resample('60min', on="Timestamp").mean()
+
+        # Blue fill bar (elevation)
+        figure['data'][0]['x'] = df_full_hourly.index[-10:].to_numpy()
+        figure['data'][0]['y'] = df_full_hourly['Afterbay_Elevation'][-10:].to_numpy()
+
+        # Empty Bar giving perception of range.
+        figure['data'][1]['x'] = df_full_hourly.index[-10:].to_numpy()
+        figure['data'][1]['y'] = df_full_hourly['Afterbay_Elevation_Setpoint'][-10:].to_numpy() - df_full_hourly["Afterbay_Elevation"][-10:].to_numpy()
+
+        return value, max, figure
 
 
-main(None)
-
-if __name__ == '__main__':
+def update_data(meters, rfc_json_data):
+    # This will store the data for all the PI requests
+    df_all = pd.DataFrame()
     meters = [PiRequest("R4", "Flow"), PiRequest("R11", "Flow"),
               PiRequest("R30", "Flow"), PiRequest("Afterbay", "Elevation"),
               PiRequest("Afterbay", "Elevation Setpoint"),
               PiRequest("Middle Fork", "Power - (with Ralston)"),
               PiRequest("Oxbow", "Power")]
-    app.run_server(debug=True)
-    main(meters)
+    for meter in meters:
+        try:
+            df_meter = pd.DataFrame.from_dict(meter.data)
+
+            # If there was an error getting the data, you will have an empty dataframe, escape for loop
+            if df_meter.empty:
+                return None
+
+            # Convert the Timestamp to a pandas datetime object and convert to Pacific time.
+            df_meter.Timestamp = pd.to_datetime(df_meter.Timestamp).dt.tz_convert('US/Pacific')
+            df_meter.index = df_meter.Timestamp
+            df_meter.index.names = ['index']
+
+            # Remove any outliers or data spikes
+            # df_meter = drop_numerical_outliers(df_meter, meter, z_thresh=3)
+
+            # Rename the column (this was needed if we wanted to merge all the Value columns into a dataframe)
+            renamed_col = (f"{meter.meter_name}_{meter.attribute}").replace(' ', '_')
+            df_meter.rename(columns={"Value": f"{renamed_col}"}, inplace=True)
+
+            if df_all.empty:
+                df_all = df_meter
+            else:
+                df_all = pd.merge(df_all, df_meter[["Timestamp", renamed_col]], on="Timestamp", how='outer')
+
+        except ValueError:
+            print('Pandas Dataframe May Be Empty')
+            return None
+
+    # The first time this code is hit, the div containing the data should not have the
+    # CNRFC data in it. Therefore, we need to download it.
+    if not rfc_json_data:
+        ######################   CNRFC SECTION ######################################
+        # Get the CNRFC Data. Note, we are putting this outside the PI request since
+        # it's entirely possible these data are not avail. If it fails, it will just
+        # skip over this portion and return a df without the CNRFC data
+        today12z = datetime.now().strftime("%Y%m%d12")
+        yesterday12z = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d12")
+        file_dates = [yesterday12z, today12z]
+        df_cnrfc_list = []
+        for file in file_dates:
+            try:
+                df_cnrfc_list.append(pd.read_csv(f"https://www.cnrfc.noaa.gov/csv/{file}_american_csv_export.zip"))
+            except HTTPError as error:
+                print(f'CNRFC HTTP Request failed {error} for {file}')
+
+        # The last element in the list will be the most current forecast. Get that one.
+        df_cnrfc = df_cnrfc_list[-1].copy()
+
+        # Drop first row (the header is two rows and the 2nd row gets put into row 1 of the df; delete it)
+        df_cnrfc = df_cnrfc.iloc[1:]
+
+        # Convert the Timestamp to a pandas datetime object and convert to Pacific time.
+        df_cnrfc.GMT = pd.to_datetime(df_cnrfc.GMT).dt.tz_localize('UTC').dt.tz_convert('US/Pacific')
+
+        df_cnrfc.rename(columns={"MFAC1L": "R20_fcst", "RUFC1": "R30_fcst", "MFPC1": "R4_fcst"}, inplace=True)
+        df_cnrfc[["R20_fcst", "R30_fcst", "R4_fcst"]] = df_cnrfc[["R20_fcst", "R30_fcst", "R4_fcst"]].apply(
+            pd.to_numeric) * 1000
+    else:
+        df_cnrfc = pd.read_json(rfc_json_data, orient='index')
+    ######################## END CNRFC ###########################################
+    return df_all, df_cnrfc
+
+
+def drop_numerical_outliers(df, meter, z_thresh):
+    # Constrains will contain `True` or `False` depending on if it is a value below the threshold.
+    # 1) For each column, first it computes the Z-score of each value in the column,
+    #   relative to the column mean and standard deviation.
+    # 2) Then is takes the absolute of Z-score because the direction does not matter,
+    #   only if it is below the threshold.
+    # 3) all(axis=1) ensures that for each row, all column satisfy the constraint.
+
+    # Note: The z-score will return NAN if all values are exactly the same. Therefore,
+    #       if all values are the same, return the original dataframe and consider the data valid, otherwise the
+    #       data won't pass the z-score test and the data will be QC'ed out.
+    u = df["Value"].to_numpy()
+    if (u[0] == u).all(0):
+        return df
+
+    orig_size = df.shape[0]
+    constrains = df.select_dtypes(include=[np.number]) \
+        .apply(lambda x: np.abs(stats.zscore(x)) < z_thresh, result_type='reduce') \
+        .all(axis=1)
+    # Drop (inplace) values set to be rejected
+    df.drop(df.index[~constrains], inplace=True)
+
+    if df.shape[0] != orig_size:
+        print(f"A total of {orig_size - df.shape[0]} data spikes detected in {meter.meter_name}. "
+              f" The data have been removed")
+    return df
+
+if __name__ == 'AbayDashboard.dash_apps.dash_abay':
+    # meters = [PiRequest("R4", "Flow"), PiRequest("R11", "Flow"),
+    #           PiRequest("R30", "Flow"), PiRequest("Afterbay", "Elevation"),
+    #           PiRequest("Afterbay", "Elevation Setpoint"),
+    #           PiRequest("Middle Fork", "Power - (with Ralston)"),
+    #           PiRequest("Oxbow", "Power")]
+    main(None)
 
 

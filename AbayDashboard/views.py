@@ -1,12 +1,14 @@
 from django.shortcuts import render, redirect, HttpResponse
-from .models import Profile, AlertPrefs
+from .models import Profile, AlertPrefs, Issued_Alarms
 from django.contrib.auth.forms import AuthenticationForm, PasswordChangeForm
 from django.contrib.auth import logout, login, authenticate, update_session_auth_hash
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core import serializers
 from django.template.defaulttags import register
+from django.utils import timezone
 import simplejson
+import pytz
 from django.template.loader import render_to_string
 from django.template import RequestContext
 from django.forms.models import model_to_dict
@@ -49,6 +51,10 @@ def dashboard(request):
                                                             abay_upper=user_preferences.data['abay_upper'],
                                                             r4_hi=user_preferences.data['r4_hi'],
                                                             r4_lo=user_preferences.data['r4_lo'],
+                                                            r30_hi=user_preferences.data['r30_hi'],
+                                                            r30_lo=user_preferences.data['r30_lo'],
+                                                            r11_hi=user_preferences.data['r11_hi'],
+                                                            r11_lo=user_preferences.data['r11_lo'],
                                                             oxbow_deviation=user_preferences.data['oxbow_deviation'])
             Profile.objects.filter(user=request.user).update(
                 alert_ok_time_start=user_profile.cleaned_data.get('alert_sTime'),
@@ -103,13 +109,15 @@ def dash_django(request):
                 # This just creates a profile the first time.
                 obj, created = AlertPrefs.objects.get_or_create(user=request.user)
                 AlertPrefs.objects.filter(user=request.user).update(
-                                                                afterbay_lo=alarm_preferences.data['afterbay_lo'],
-                                                                afterbay_hi=alarm_preferences.data['afterbay_hi'],
-                                                                r4_hi=alarm_preferences.data['r4_hi'],
-                                                                r4_lo=alarm_preferences.data['r4_lo'],
-                                                                r11_hi=alarm_preferences.data['r11_hi'],
-                                                                r11_lo=alarm_preferences.data['r11_lo'],
-                                                                oxbow_deviation=alarm_preferences.data['oxbow_deviation'])
+                                                                afterbay_lo=alarm_preferences.cleaned_data['afterbay_lo'],
+                                                                afterbay_hi=alarm_preferences.cleaned_data['afterbay_hi'],
+                                                                r4_hi=alarm_preferences.cleaned_data['r4_hi'],
+                                                                r4_lo=alarm_preferences.cleaned_data['r4_lo'],
+                                                                r30_hi=alarm_preferences.cleaned_data['r30_hi'],
+                                                                r30_lo=alarm_preferences.cleaned_data['r30_lo'],
+                                                                r11_hi=alarm_preferences.cleaned_data['r11_hi'],
+                                                                r11_lo=alarm_preferences.cleaned_data['r11_lo'],
+                                                                oxbow_deviation=alarm_preferences.cleaned_data['oxbow_deviation'])
                 # Profile.objects.filter(user=request.user).update(
                 #     alert_ok_time_start=user_profile.cleaned_data.get('alert_sTime'),
                 #     alert_ok_time_end=user_profile.cleaned_data.get('alert_eTime'),
@@ -127,10 +135,21 @@ def dash_django(request):
             else:
                 print(alarm_preferences.errors)
                 for msg in alarm_preferences.errors:
-                    messages.error(request, f"{msg}:{alarm_preferences.errors[msg].data[0].message}")
+                    messages.error(request, f"Failed: {msg}:{alarm_preferences.errors[msg].data[0].message}")
                     if request.is_ajax():
                         message_data = ajax_msg_builder(request)
                         return HttpResponse(message_data, content_type="application/json")
+
+        # This is being send from the "Recently Triggered Alarms" modal. This works like email, with unread
+        # messages and the ability to delete messages.
+        if 'pk_delete' in request.POST:
+            if request.is_ajax():
+                message_data = ajax_msg_builder(request)
+                pk_val = request.POST['pk_delete']
+                Issued_Alarms.objects.filter(user=request.user, pk=pk_val).delete()
+                return HttpResponse(message_data, content_type="application/json")
+    # New alerts not seen on website yet
+    new_alerts = list(Issued_Alarms.objects.values_list('id', flat=True).filter(user=request.user, seen_on_website=False))
 
     # The form data
     alarm_preferences = AlertForm(request.POST, instance=request.user.profile)
@@ -139,10 +158,23 @@ def dash_django(request):
     # The values in the database for a given user
     user_alert_data = AlertPrefs.objects.filter(user=request.user)
     user_profile_data = Profile.objects.filter(user=request.user)
+    user_issued_alarms = Issued_Alarms.objects.filter(user=request.user)
 
     user_alert_data_json = serializers.serialize("python", user_alert_data)
     user_profile_json = serializers.serialize("python", user_profile_data)
+    user_issued_alarms_json = serializers.serialize("python", user_issued_alarms)
 
+    for i, alarm in enumerate(user_issued_alarms_json):
+        t = alarm['fields']['trigger_time']
+        local_tz = pytz.timezone("US/Pacific")
+        local_time = t.replace(tzinfo=pytz.UTC).astimezone(local_tz)
+        user_issued_alarms_json[i]['fields']['trigger_time'] = local_time
+
+
+    # Reset all values for seen on website to True. The next time the user logs on, these will reset. Note, we need
+    # this to occur only on a GET, since any other POST request would reset this data.
+    if request.method == "GET":
+        Issued_Alarms.objects.filter(user=request.user).update(seen_on_website=True)
     # The entire job could be passed with only the user_alert_data; however, we also want to pass
     # the alarm_preferences form so that the <div> fields are in the order we want. That way, when we loop
     # in the template, it will display the LOW value first, which puts it on the left hand side and then
@@ -153,7 +185,9 @@ def dash_django(request):
                   context={'alarm_preferences':alarm_preferences,
                            'profile_form':user_profile,
                            "user_alert_data":user_alert_data_json[0],
-                           "user_profile_data":user_profile_json[0]})
+                           "user_profile_data":user_profile_json[0],
+                           "user_issued_alarms":user_issued_alarms_json,
+                           "new_alerts": len(new_alerts)})
 
 
 def dash(request):

@@ -41,7 +41,9 @@
                 <a href="#">
               <i class="fa fa-bell"></i>
               <span>Manage Alarms</span>
-              <span class="badge badge-pill badge-danger">3</span>
+               {% if new_alerts > 0 %}
+                    <span class="badge badge-pill badge-danger">{{ new_alerts }}</span>
+                {% endif %}
             </a>
                 <div class="sidebar-submenu" style="display: none;">
               <ul>
@@ -56,16 +58,27 @@
             </li>
              <li class="sidebar-dropdown">
                 <a href="#">
-              <i class="fa fa-bell"></i>
-              <span>Submit Changes</span>
-              <span class="badge badge-pill badge-danger">3</span>
-            </a>
-                <div class="sidebar-submenu" style="display: none;">
-            </div>
+                  <i class="fa fa-wrench"></i>
+                  <span>Tools</span>
+                </a>
+                    <div class="sidebar-submenu" style="display: none;">
+                  <ul>
+                    <li>
+                      <a href="#">Afterbay Management</a>
+                    </li>
+                    <li>
+                      <a href="#">Weather Portal</a>
+                    </li>
+                    <li>
+                      <a href="#">Hydrology</a>
+                    </li>
+                  </ul>
+                </div>
             </li>
             <li class="sidebar-dropdown active">
 
             </li>
+        <!--
             <li class="sidebar-dropdown">
             <a href="#">
               <i class="fa fa-shopping-cart"></i>
@@ -88,6 +101,7 @@
               </ul>
             </div>
           </li>
+          -->
         </ul>
         </div>
         </div>
@@ -97,9 +111,11 @@
         <i class="fa fa-bell"></i>
         <span class="badge badge-pill badge-warning notification">3</span>
       </a>
-      <a href="#">
+      <a id="alarm_messages" href="#">
         <i class="fa fa-envelope"></i>
-        <span class="badge badge-pill badge-success notification">7</span>
+          {% if new_alerts > 0 %}
+            <span class="badge badge-pill badge-success notification">{{ new_alerts }}</span>
+          {% endif %}
       </a>
       <a id="alarm_prefs" href="#">
         <i class="fa fa-cog"></i>

@@ -35,11 +35,12 @@ class AlertPrefs(models.Model):
 class Issued_Alarms(models.Model):
     user = models.ForeignKey(User, null=True, on_delete=models.SET_NULL)
     alarm_trigger = models.TextField(null=True)
-    alarm_setpoint = models.IntegerField(null=True)
-    trigger_value = models.IntegerField(null=True)
+    alarm_setpoint = models.FloatField(null=True)
+    trigger_value = models.FloatField(null=True)
     trigger_time = models.DateTimeField(null=True)
     alarm_sent = models.BooleanField(null=True)
     alarm_still_active = models.BooleanField(null=True)
+    seen_on_website = models.BooleanField(null=True)
 
 
 # Whenever there is a post_save in the User model, run the following code
