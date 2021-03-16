@@ -9,6 +9,7 @@ class Profile(models.Model):
     alert_ok_time_start = models.DateTimeField(null=True, blank=True)
     alert_ok_time_end = models.DateTimeField(null=True, blank=True)
     phone_number = models.CharField(blank=True, null=True, max_length=15)
+    phone_carrier = models.CharField(blank=True, null=True, max_length=30)
     alarm_on = models.BooleanField(null=True)
 
     def __str__(self):

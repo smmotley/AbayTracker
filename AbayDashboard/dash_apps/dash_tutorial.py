@@ -18,6 +18,7 @@ from django_plotly_dash import DjangoDash
 import dash_bootstrap_components as dbc
 from htexpr import compile
 import dash_daq as daq
+import psutil
 
 # ###To run the app on it's own (not in Django), you would do:
 # app = dash.Dash()

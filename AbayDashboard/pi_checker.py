@@ -66,7 +66,7 @@ def main():
     meters = [PiRequest("OPS", "R4", "Flow"), PiRequest("OPS", "R11", "Flow"),
               PiRequest("OPS", "R30", "Flow"), PiRequest("OPS", "Afterbay", "Elevation"),
               PiRequest("OPS", "Afterbay", "Elevation Setpoint"),
-              PiRequest("OPS", "Middle Fork", "Power - (with Ralston)"),
+              PiRequest("Energy_Marketing", None, "GEN_MDFK_and_RA"),
               PiRequest("Energy_Marketing", None, "ADS_MDFK_and_RA"),
               PiRequest("Energy_Marketing", None, "ADS_Oxbow"),
               PiRequest("Energy_Marketing", None, "Oxbow_Forecast")]
@@ -140,6 +140,7 @@ def alarm_checker(meter, df, column_name):
             # Loop through all active alarms
             for active_alarm in alarm_active_hi:
                 # If the an alarm is active, but it is now not exceeding the threshold, reset the alarm.
+                # Note: hi_Q contains 1 hour of data, so the entire hour must be below the threshold to reset the alarm.
                 if not AlertPrefs.objects.filter(hi_Q, user_id=active_alarm.user_id).exists():
                     Issued_Alarms.objects.filter(id=active_alarm.id).update(alarm_still_active=False)
 
@@ -148,6 +149,7 @@ def alarm_checker(meter, df, column_name):
             # Loop through all active alarms
             for active_alarm in alarm_active_lo:
                 # If the an alarm is active, but it is now not exceeding the threshold, reset the alarm.
+                # Note: lo_Q contains 1 hour of data, so the entire hour must be below the threshold to reset the alarm.
                 if not AlertPrefs.objects.filter(lo_Q, user_id=active_alarm.user_id).exists():
                     Issued_Alarms.objects.filter(id=active_alarm.id).update(alarm_still_active=False)
         # ################## END RESET ###############
@@ -233,12 +235,18 @@ def update_alertDB(users, alarm_trigger, trigger_value):
     return
 
 def send_alerts():
+    carrier_dict = {"AT&T": "@mms.att.net",
+                    "Verizon": "@vzwpix.com",
+                    "T-Mobile": "@tmomail.net",
+                    "Sprint": "@pm.sprint.com"}
     need_to_send = Issued_Alarms.objects.filter(alarm_sent=False)
     if need_to_send.exists():
         for alert in need_to_send:
             user_profile = Profile.objects.get(user__id=alert.user_id)
             user_phone = user_profile.phone_number
             user_email = user_profile.user.email
+            user_carrier = user_profile.user.carrier
+            mms = f"{user_phone}{carrier_dict[user_carrier]}"
             pretty_name = (alert.alarm_trigger.split('_')[0]).upper()
             email_body = f"{alert.alarm_trigger} triggered this alert \n" \
                          f"Current Value: {alert.trigger_value} \n" \

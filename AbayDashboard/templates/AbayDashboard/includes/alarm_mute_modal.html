@@ -29,7 +29,7 @@
                             <div id="alarm_mute_wrapper" class="row align-self-center" style="border-bottom: 5px solid #6e6e6e;">
                                 {%  csrf_token %}
                                 <!--ALARM ON TOGGLE-->
-                                    <h5 style="padding: 0 40px 0 20px">Alerts are currently: </h5>
+                                    <h5 style="padding: 0 40px 0 20px">Text Alerts: </h5>
                                     <label class="c-switch c-switch-label c-switch-success c-switch-lg">
                                          <input type="checkbox"
                                                 name="{{ profile_form.alarm_on.name }}"
@@ -88,6 +88,7 @@
                             <!--Phone Number-->
                             <div class="row justify-content-around">
                                 <div class="col-xs-6 col-form-label mr-2">{{ profile_form.phone_number.label_tag }}</div>
+                                <div class="col-xs-6 col-form-label mr-2">Phone Carrier</div>
                             </div>
                             <div class="row">
                                  <div class="col-sm-6">
@@ -99,7 +100,16 @@
                                                placeholder="Phone Number:"
                                                onkeydown="javascript:backspacerDOWN(this,event);" onkeyup="javascript:backspacerUP(this,event);"
                                                value="{{user_alert_data.fields|get_item:profile_form.phone_number.name  | default_if_none:""}}">
-                                    </div>
+                                 </div>
+                                <div class="forrm-group col-sm-6">
+                                    <select class="form-control" name="phone_carrier">
+                                      <option value="{{user_alert_data.fields|get_item:profile_form.phone_carrier.name  | default_if_none:""}}"selected>{{user_alert_data.fields|get_item:profile_form.phone_carrier.name  | default_if_none:"Select"}}</option>
+                                      <option value="AT&T">AT&T</option>
+                                      <option value="Verizon">Verizon</option>
+                                      <option value="T-Mobile">T-Mobile</option>
+                                      <option value="Sprint">Sprint</option>
+                                    </select>
+                                </div>
                             </div>
 
                             <div class="alarm_notes" style="display:none"></div>
@@ -175,8 +185,12 @@ alarm_time_toggle.addEventListener('change', function() {
     // reloading, the views.py won't send any info in the {messages} tags, so
     $(document).ready(function() {
     $('#alarmMuteForm').submit(function() { // On form submit event
+        var carrier_dict = {"AT&T"     :"@mms.att.net",
+                            "Verizon"  :"@vzwpix.com",
+                            "T-Mobile" :"@tmomail.net",
+                            "Sprint"   :"@pm.sprint.com"}
         // Repalce any non-digit, or any +1 (area code) so that the number is always 1112223333
-        var phone = ($(this).find("[name='phone_number']").val()).replace(/\+\d|[^\d]/g, '');
+        let phone = ($(this).find("[name='phone_number']").val()).replace(/\+\d|[^\d]/g, '');
 
         // Add the areacode info back in.
        // var clean_phNo = "+1"+phone
@@ -186,6 +200,7 @@ alarm_time_toggle.addEventListener('change', function() {
             type: $(this).attr('method'), // GET or POST
             url: $(this).attr('action'), // the file to call
             success: function(response) { // on success..
+                console.log("SUCCESS", response.msg)
                 $("#alarm_on_off > i")
                     .attr('style', "color: #818896; text-shadow: none;") // Alarm Turned off
 

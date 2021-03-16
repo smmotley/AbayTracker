@@ -107,10 +107,6 @@
         </div>
         <!-- sidebar-content  -->
         <div class="sidebar-footer">
-      <a href="#">
-        <i class="fa fa-bell"></i>
-        <span class="badge badge-pill badge-warning notification">3</span>
-      </a>
       <a id="alarm_messages" href="#">
         <i class="fa fa-envelope"></i>
           {% if new_alerts > 0 %}
@@ -118,10 +114,14 @@
           {% endif %}
       </a>
       <a id="alarm_prefs" href="#">
+        <i class="fa fa-bell"></i>
+        <span class="badge badge-pill badge-warning notification">{{ new_alerts }}</span>
+      </a>
+        <a id="alarm_on_off" href="#">
         <i class="fa fa-cog"></i>
         <span class="badge-sonar"></span>
       </a>
-      <a id="alarm_on_off" href="#" {% if user_profile_data.fields|get_item:profile_form.alarm_on.name %}
+      <a id="pi_checker_status" href="#" {% if user_profile_data.fields|get_item:profile_form.alarm_on.name %}
           style="color:#8bff24; text-shadow: 0px 0px 10px rgb(40 255 1 / 50%)"
        {% endif %}>
         <i class="fa fa-power-off"></i>

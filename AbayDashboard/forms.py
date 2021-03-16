@@ -55,11 +55,27 @@ class UserProfileForm(forms.ModelForm):
                                             regex='^\d{9,15}',
                                             message= "Enter Area Code and Phone Number: (222) 555-5555"
                                             )
-                                        ])
+                                        ],
+                                   widget=forms.TextInput(attrs={'placeholder': 'Phone Number',
+                                                                 'data-target': '#phone_number'})
+                                   )
+    phone_carrier = forms.CharField(label="Carrier", required=False)
 
     def clean(self):
         cleaned_data = super().clean()
+        carrier = cleaned_data.get("phone_carrier")
+        phone = cleaned_data.get("phone_number")
+
+        # When the form passes a blank string, treat it as a None type so that it is <null> in database
+        if len(carrier) < 3:
+            self.cleaned_data['phone_carrier'] = None
+            carrier = None
+        if len(phone) < 10:
+            self.cleaned_data['phone_number'] = None
+            phone = None
         start_end_times = [cleaned_data.get("alert_ok_time_start"), cleaned_data.get("alert_ok_time_end")]
+
+        mms_info = [phone, carrier]
 
         # Check to ensure BOTH start time and end time are submitted, not just one or the other.
         if any(v is not None for v in start_end_times): # There is at least one value
@@ -67,13 +83,20 @@ class UserProfileForm(forms.ModelForm):
                 raise ValidationError(
                     "Both Start and End time must be submitted together."
                 )
-        return cleaned_data
+
+        # Check that BOTH a phone number and carrier were entered.
+        if any(p is not None for p in mms_info): # There is at least one value
+            if any(mm is None for mm in mms_info):   # There is at least one blank
+                raise ValidationError(
+                    "Please enter BOTH phone and provider information."
+                )
+        return self.cleaned_data
 
 
     class Meta:
         model = Profile
-        fields = ("alarm_on", "alert_ok_time_start", "alert_ok_time_end", "phone_number") # So, same as before, but now we're including email
-        field_order = ["alarm_on", "alert_ok_time_start", "alert_ok_time_end", "phone_number"]
+        fields = ("alarm_on", "alert_ok_time_start", "alert_ok_time_end", "phone_number", "phone_carrier") # So, same as before, but now we're including email
+        field_order = ["alarm_on", "alert_ok_time_start", "alert_ok_time_end", "phone_number", "phone_carrier"]
 
 
 class AlertForm(forms.ModelForm):

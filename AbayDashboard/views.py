@@ -16,6 +16,8 @@ from .forms import UserProfileForm, AlertForm
 from plotly.offline import plot
 import plotly.graph_objects as go
 import json
+import psutil
+import subprocess, os
 
 @register.filter
 def get_item(dictionary, key):
@@ -80,9 +82,14 @@ def dash_django(request):
         alarm_preferences = AlertForm(request.POST, instance=request.user.profile)
         user_profile = UserProfileForm(request.POST, instance=request.user.profile)
 
-        # We have two ajax form submittals on this page.
+        # We have three ajax form submittals on this page.
         #   1) For the user preferences (e.g. turing alarms on/off, phone numbers, etc)
         #   2) For the alert triggers (e.g. abay levels, etc.)
+        #   3) Admin able to restart the pi_checker program
+
+        if "restart_pi_checker" in request.POST:
+            print("Not working yet")
+            #restart_pi_checker()
 
         # If the POST contains data with "alert_ok_time_start", then we know it's from user_profile update request.
         if "alert_ok_time_start" in request.POST:
@@ -94,11 +101,15 @@ def dash_django(request):
                     alert_ok_time_start=user_profile.cleaned_data['alert_ok_time_start'],
                     alert_ok_time_end=user_profile.cleaned_data['alert_ok_time_end'],
                     phone_number=user_profile.cleaned_data['phone_number'],
+                    phone_carrier=user_profile.cleaned_data['phone_carrier'],
                 )
-                messages.success(request,f"Prefernces Saved")  # NOTE: f-string: we are now passing the variable {username}
+                messages.success(request,f"Preferences Saved")  # NOTE: f-string: we are now passing the variable {username}
+                if request.is_ajax():
+                    message_data = ajax_msg_builder(request)
+                    return HttpResponse(message_data, content_type="application/json")
             else:
                 for msg in user_profile.errors:
-                    messages.error(request, f"{msg}:{user_profile.errors[msg].data[0].message}")
+                    messages.error(request, f"{user_profile.errors[msg].data[0].message}")
                     if request.is_ajax():
                         message_data = ajax_msg_builder(request)
                         return HttpResponse(message_data, content_type="application/json")
@@ -218,6 +229,19 @@ def dash(request):
 
 def dash_tutorial(request):
     return render(request, 'AbayDashboard/dash_tutorial.html', {})
+
+
+def restart_pi_checker():
+    pi_process = False
+    for p in psutil.process_iter():
+        if "python" in p.name():  # Any process that is python
+            for arg in p.cmdline():  # Check all python processes
+                if "pi_checker" in arg:  # If "pi_checker" is in any of those, program is running.
+                    pi_process = True
+    if not pi_process:
+        thisPath = os.path.dirname(os.path.realpath(__file__))
+        subprocess.run(['bash -c conda activate django_python', "python", os.path.join(thisPath, 'pi_checker.py')])
+    return
 
 
 def login_request(request):

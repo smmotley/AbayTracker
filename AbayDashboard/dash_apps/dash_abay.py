@@ -21,6 +21,9 @@ from htexpr import compile
 import dash_daq as daq
 from scipy import stats
 import json
+from .dash_abay_extras.layout import top_cards
+from ..mailer import send_mail
+import psutil
 
 # ###To run the app on it's own (not in Django), you would do:
 # app = dash.Dash()
@@ -43,7 +46,8 @@ import json
 class PiRequest:
     #
     # https://flows.pcwa.net/piwebapi/assetdatabases/D0vXCmerKddk-VtN6YtBmF5A8lsCue2JtEm2KAZ4UNRKIwQlVTSU5FU1NQSTJcT1BT/elements
-    def __init__(self, meter_name, attribute):
+    def __init__(self, db, meter_name, attribute):
+        self.db = db  # Database (e.g. "Energy Marketing," "OPS")
         self.meter_name = meter_name  # R4, Afterbay, Ralston
         self.attribute = attribute  # Flow, Elevation, Lat, Lon, Storage, Elevation Setpoint, Gate 1 Position, Generation
         self.baseURL = 'https://flows.pcwa.net/piwebapi/attributes'
@@ -53,11 +57,20 @@ class PiRequest:
 
     def url(self):
         try:
-            response = requests.get(
-                url="https://flows.pcwa.net/piwebapi/attributes",
-                params={"path": f"\\\\BUSINESSPI2\\OPS\\{self.meter_element_type}\\{self.meter_name}|{self.attribute}",
+            if self.db == "Energy_Marketing":
+                response = requests.get(
+                    url="https://flows.pcwa.net/piwebapi/attributes",
+                    params={
+                        "path": f"\\\\BUSINESSPI2\\{self.db}\\Misc Tags|{self.attribute}",
+                    },
+                )
+            else:
+                response = requests.get(
+                    url="https://flows.pcwa.net/piwebapi/attributes",
+                    params={
+                        "path": f"\\\\BUSINESSPI2\\{self.db}\\{self.meter_element_type}\\{self.meter_name}|{self.attribute}",
                         },
-            )
+                )
             j = response.json()
             url_flow = j['Links']['InterpolatedData']
             return url_flow
@@ -87,6 +100,8 @@ class PiRequest:
             return None
 
     def meter_element_type(self):
+        if not self.meter_name:
+            return None
         if self.attribute == "Flow":
             return "Gauging Stations"
         if "Afterbay" in self.meter_name:
@@ -104,11 +119,9 @@ if local:
     )
     server = app.server
     df = pd.read_csv("pcwa_locations.csv")
-    dfp = pd.read_csv("spc_data.csv")
 else:
     app = DjangoDash('dash_django', suppress_callback_exceptions=True, add_bootstrap_links=True)
     df = pd.read_csv(staticfiles_storage.path("data/pcwa_locations.csv"))  # make sure this is in the static dir
-    dfp = pd.read_csv(staticfiles_storage.path("data/spc_data.csv"))
 
 main_dir = os.path.abspath(os.path.join(os.path.dirname( __file__ ), '..'))
 mapbox_access_token = "pk.eyJ1Ijoic21vdGxleSIsImEiOiJuZUVuMnBBIn0.xce7KmFLzFd9PZay3DjvAA"
@@ -136,12 +149,6 @@ def main(meters):
         "PRECIP_72": "https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/q2-p72h-900913/{z}/{x}/{y}.png",
     }
 
-    map_meter_options = {
-        'River Flows': ['R4', 'R11', 'R20', 'R30'],
-        'Abay Management': ['Elevation', 'Oxbow', 'Rafting'],
-        'Generation': ['Oxbow', 'French Meadows', 'Ralston']
-    }
-
 # Layout for line graph plot.
     layout = dict(
         margin=dict(l=40, r=40, b=40, t=40),
@@ -152,363 +159,7 @@ def main(meters):
         height=400
     )
 
-
-    top_row_cards = dbc.Row([
-        # Top Card Columns.
-        # Every card in this  column denoted by a classname of: col-md-6 col-xxl-3 mb-3 pr-md-2"
-        # That stands for:
-        # col-md-6: take up 6 grid spaces (50% of the row) for medium screens
-        # col-lg-3: take up 3 columns (25% of the row) for large screens
-        # mb-3: margin-bottom of 3: 1 rem (e.g. 16px if font-size is 16)
-        # pr-md-2: padding-right for medium-size screens or larger is 2: 0.5 rem or 8px if fontsize is 16px
-        html.Div([
-            # ABAY CARD class of h-md-100 which means height on medium screens of 100%
-            dbc.Card([
-            dbc.CardHeader(f"Abay - "
-                           f"Elev: {round(df_all['Afterbay_Elevation'].iloc[-1],1)}"),
-                           #f" Updated: {(df_all['Timestamp'].iloc[-1]).strftime('%b %d, %H:%M %p')}"),
-            # ABAY CARD BODY has ONE row and TWO columns.
-            # The body class is: d-flex aligh-items-end
-            # d-flex (display-flex): create a flexbox container and transform direct children elements into flex items.
-            # align-items-end: center everything in this flex container from the bottom right corner.
-            dbc.CardBody(
-                # THE ROW OF THIS CARD BODY HAS TWO COLUMNS, with class of flex-grow-1
-                # flex-grow-1: the rate at which this will grow relative to other rows...not sure this is needed.
-                dbc.Row([
-                    dbc.Col(
-                        daq.Tank(
-                            id='my-tank2',
-                            className='dark-theme-control',
-                            value=round(df_all["Afterbay_Elevation"].iloc[-1], 1),
-                            min=1165,
-                            height=110,  # Required! This is based off of a top-row height of 200px.
-                            max=df_all["Afterbay_Elevation_Setpoint"].values.max(),
-                            color='#2376f3',
-                            units="",
-                            showCurrentValue=True,
-                        ), width=6,
-                    ),
-                    dbc.Col(
-                        dcc.Graph(
-                            className="sparkline_graph",
-                            id="abay_bargraph",
-                            style={"width": "100%", "height": "100%"},
-                            config={
-                                "staticPlot": False,
-                                "editable": False,
-                                "displayModeBar": False,
-                            },
-                            figure={
-                                    "data": [
-                                        {
-                                            "x": df_hourly_resample.index[-10:],
-                                            "y": df_hourly_resample['Afterbay_Elevation'][-10:],
-                                            "type": "bar",
-                                            "name": "Elevation",
-                                            "marker":{"color":'#2c7be5'},
-                                            #"text":df_all['Afterbay_Elevation'][-10:],
-                                            #"hoverinfo":"y",
-                                            # The <extra></extra> gets rid of the y-axis label
-                                            # see: https://plotly.com/python/reference/#bar-hovertext
-                                            "hovertemplate": "%{x|%b-%d <br> %I:%M %p} <br> %{y}<extra></extra>",
-                                            #"width":"1.5",
-                                        },
-                                        {
-                                            "x": df_hourly_resample.index[-10:],
-                                            "y": df_hourly_resample['Afterbay_Elevation_Setpoint'][-10:] -
-                                                 df_hourly_resample["Afterbay_Elevation"][-10:],
-                                            "type": "bar",
-                                            "name": "Space",
-                                            "marker": {"color": '#061325'},
-                                            "hoverinfo": "skip",
-                                            #"width": "1.5",
-                                        },
-
-                                    ],
-                                    "layout": {
-                                        "margin": dict(l=0, r=0, t=4, b=4, pad=0),
-                                        "title": None,
-                                        "showlegend":False,
-                                        "yaxis":dict(
-                                            title=None,
-                                            titlefont_size=16,
-                                            tickfont_size=14,
-                                            showline=False,
-                                            showgrid=False,
-                                            zeroline=False,
-                                            showticklabels=False,
-                                            visible=False,
-                                            range=[1168,df_all["Afterbay_Elevation_Setpoint"].values.max()]
-                                            ),
-                                        "xaxis":dict(
-                                            showline=False,
-                                            showgrid=False,
-                                            zeroline=False,
-                                            showticklabels=False,
-                                            visible=False,  # numbers below
-                                        ),
-                                        "legend": None,
-                                        "width": 140,
-                                        "hovermode":"closest",
-                                        "barmode": 'relative',
-                                        "paper_bgcolor":'rgba(0,0,0,0)',
-                                        "plot_bgcolor":"rgba(0,0,0,0)",
-                                        #"bargap": 0.05, # gap between bars of adjacent location coordinates.
-                                        #"bargroupgap":0.05, # gap between bars of the same location coordinate.,
-                                        "autosize": True,
-                                    },
-                                }
-                        ), width="6", className='sparkline pl-0',
-                    )
-                ]),
-                className='align-items-end'
-            )
-            ], color="dark", inverse=True, className="h-100")],
-            className="col-sm-12 col-md-12 col-lg-3 mb-3 pr-md-2"
-        ),
-        html.Div([
-            dbc.Card([
-                dbc.CardHeader("MF+RA Gen vs Scheduled"),
-                dbc.CardBody(
-                    dbc.Row([
-                            dbc.Col(dbc.Row([
-                                    dbc.Col("MFPH", width=12, className='text-uppercase text-tracked mb-2 text-nowrap'),
-                                    dbc.Col(round(df_all["Middle_Fork_Power_-_(with_Ralston)"].iloc[-1],1), width=12,
-                                            className='badge badge-success text-size-2 text-monospace mx-auto'),
-                                    dbc.Col("Ox", width=12, className='text-uppercase text-tracked mt-2 text-nowrap'),
-                                    dbc.Col(round(df_all["Oxbow_Power"].iloc[-1], 1), width=12,
-                                            className='badge badge-success text-size-2 text-monospace mx-auto'),
-                            ], className='gen_badge', style={"height":"30%", "top":"-10px"}),width=3),
-                    dbc.Col(
-                        # Row Classname of "h-100" is critical here, since the plots will only take up space that's
-                        # taken. But plotly plots are very stupid, for this to really work nicely, it's best to
-                        # explicitly say the height of the object. If you don't, the first item that draws will take
-                        # up the space in the column (so in this case, there are two graphs and the second one gets,
-                        # squished just enough to make it noticable.
-                        dbc.Row([
-                        dbc.Col(
-                            dcc.Graph(
-                                className="sparkline_graph h-100",
-                                config={
-                                    "staticPlot": False,
-                                    "editable": False,
-                                    "displayModeBar": False,
-                                },
-                                figure=go.Figure(
-                                    {
-                                        "data": [
-                                            {
-                                                "x": df_all["Timestamp"],
-                                                "y": df_all["Middle_Fork_Power_-_(with_Ralston)"],
-                                                "mode": "lines",
-                                                "name": "MFPH",
-                                                "line": {"color": "#f4d44d"},
-                                                "hovertemplate": "%{x|%b-%d <br> %I:%M %p} <br> %{y:.1f}<extra></extra>",
-                                            }
-                                        ],
-                                        "layout": {
-                                            "margin": dict(l=0, r=0, t=4, b=4, pad=0),
-                                            "xaxis": dict(
-                                                showline=False,
-                                                showgrid=False,
-                                                zeroline=False,
-                                                showticklabels=False,
-                                            ),
-                                            "yaxis": dict(
-                                                showline=False,
-                                                showgrid=False,
-                                                zeroline=False,
-                                                showticklabels=False,
-                                            ),
-                                            "autosize": True,
-                                            "height" : 50, #px
-                                            "paper_bgcolor": "rgba(0,0,0,0)",
-                                            "plot_bgcolor": "rgba(0,0,0,0)",
-                                        },
-                                    }
-                                ),
-                            ), width=11, className='sparkline'),
-                        dbc.Col(
-                            dcc.Graph(
-                                className="sparkline_graph h-100",
-                                config={
-                                    "staticPlot": False,
-                                    "editable": False,
-                                    "displayModeBar": False,
-                                },
-                                figure=go.Figure(
-                                    {
-                                        "data": [
-                                            {
-                                                "x": df_all["Timestamp"],
-                                                "y": df_all["Oxbow_Power"],
-                                                "mode": "lines",
-                                                "name": "Oxbow",
-                                                "line": {"color": "#f4d44d"},
-                                                "hovertemplate": "%{x|%b-%d <br> %I:%M %p} <br> %{y:.1f}<extra></extra>",
-                                            }
-                                        ],
-                                        "layout": {
-                                            "margin": dict(l=0, r=0, t=4, b=4, pad=0),
-                                            "xaxis": dict(
-                                                showline=False,
-                                                showgrid=False,
-                                                zeroline=False,
-                                                showticklabels=False,
-                                            ),
-                                            "yaxis": dict(
-                                                showline=False,
-                                                showgrid=False,
-                                                zeroline=False,
-                                                showticklabels=False,
-                                            ),
-                                            "autosize": True,
-                                            "height": 50, #px
-                                            "paper_bgcolor": "rgba(0,0,0,0)",
-                                            "plot_bgcolor": "rgba(0,0,0,0)",
-                                        },
-                                    }
-                                ),
-                            ), width=11, className='sparkline'),
-                        ], className='h-100'), width=9, className='sparkline'),
-                ],
-                    className="flex-grow-1"),
-                    className='d-flex align-items-end')
-            ], color="dark", inverse=True, className='h-100')],
-            className="col-sm-12 col-md-12 col-lg-3 mb-3 pr-md-2"
-        ),
-        html.Div([
-            dbc.Card([
-                dbc.CardHeader(
-                               children=[
-                                "R4 Flow",
-                               html.Label(
-                                   id="cnrfc_switch",
-                                   n_clicks=0,
-                                   style={'float': 'right', 'margin-bottom': '0'},
-                                   children=[
-                                       dcc.Input(
-                                       type="checkbox",
-                                       id="cnrfc_toggle",
-                                       className="c-switch-input",
-                                       value="",
-                                   ),
-                                    html.Span(
-                                        className="c-switch-slider",
-                                        id="cnrfc_switch_span",
-                                        n_clicks=0,
-                                        **{'data-checked':"on",
-                                           'data-unchecked':"off"},
-                                    ),
-                                   ],
-                                   className="c-switch c-switch-label c-switch-success c-switch-sm",
-                               )]
-                               ),
-                dbc.CardBody(
-                    children=[
-                        dbc.Row([
-                    dbc.Col(
-                        daq.LEDDisplay(
-                            size=20,
-                            value=int(df_all["R4_Flow"].iloc[-1]),
-                            color="#FF5E5E",
-                            backgroundColor="#343a40"
-                        ),
-                    width=3),
-                    dbc.Col(
-                        dcc.Loading(
-                            id='loading_r4_sparkline',
-                            type="circle",
-                            className='h-100',
-                            parent_className="loading_wrapper h-100",
-                            children=[
-                                dcc.Graph(
-                                    id="r4sparkline",
-                                    # Parent div of the figure must have a height or it will base height on
-                                    # container.
-                                    style={"height":120},
-                                    className="sparkline_graph",
-                                    config={
-                                        "staticPlot": False,
-                                        "editable": False,
-                                        "displayModeBar": False,
-                                    },
-                                    figure=go.Figure(),
-                                )]
-                        ), width=9, className='sparkline'
-                    )
-                ], className="h-100"),
-                        html.Div(
-                            "TIMESTAMP",
-                            id="cnrfc_timestamp_r4",
-                            style={"background-color": "gray",
-                                   "position": "absolute",
-                                   "left": "0px", "right": "0px", "bottom": "0px"})
-                    ]
-                ),
-            ], color="dark", className="h-100", inverse=True)],
-            className="col-sm-12 col-md-12 col-lg-3 mb-3 pr-md-2"
-        ),
-        html.Div([
-            dbc.Card([
-                dbc.CardHeader(children=[
-                                "R30 Flow",
-                               html.Label(
-                                   id="cnrfc_switch_r30",
-                                   n_clicks=0,
-                                   style={'float': 'right', 'margin-bottom': '0'},
-                                   children=[
-                                       dcc.Input(
-                                       type="checkbox",
-                                       id="cnrfc_toggle_r30",
-                                       className="c-switch-input",
-                                       value="",
-                                   ),
-                                    html.Span(
-                                        className="c-switch-slider",
-                                        id="cnrfc_switch_span_r30",
-                                        n_clicks=0,
-                                        **{'data-checked':"on",
-                                           'data-unchecked':"off"},
-                                    ),
-                                   ],
-                                   className="c-switch c-switch-label c-switch-success c-switch-sm",
-                               )]),
-                dbc.CardBody(
-                    dbc.Row([
-                    dbc.Col(
-                        daq.LEDDisplay(
-                            size=20,
-                            value=int(df_all["R30_Flow"].iloc[-1]),
-                            color="#FF5E5E",
-                            backgroundColor="#343a40"
-                        ), width=3
-                    ),
-                    dbc.Col(
-                        dcc.Graph(
-                            className="sparkline_graph",
-                            id="r30sparkline",
-                            # Parent div of the figure must have a height or it will base height on
-                            # container.
-                            style={"height":120},
-                            config={
-                                "staticPlot": False,
-                                "editable": False,
-                                "displayModeBar": False,
-                            },
-                            figure=go.Figure(),
-                        ), width=9, className='sparkline'
-                    )
-                ], className="h-100"
-                    ),
-                )
-            ], color="dark", inverse=True, className='h-100')],
-            className="col-sm-12 col-md-12 col-lg-3 mb-3 pr-md-2"
-        )
-        ],
-        className='top-cards no-gutters'
-    )
-
+    top_row_cards = top_cards(df_all, df_hourly_resample)
 
     app.layout = html.Main(
         className='content container',
@@ -571,7 +222,7 @@ def main(meters):
                             )
             ], className="no-gutters"),
             html.Div(id='dummy-output'),
-            html.Div(id='dummy-output-timer'),
+            html.Div(id='dummy-output-timer', **{'data-pi_checker_running': "true"},),
             # This div will store our dataframe with all the PI data. It's a way for the
             # callbacks to share data
             html.Div(id='dummy-dataframe', style={'display':'none'}),
@@ -586,25 +237,58 @@ def main(meters):
         ]
     )
 
-
-    def produce_individual(api_stn_num):
+    # A function to plot the main graph.
+    def produce_individual(api_stn_name, rfc_json_data):
         try:
-            point = df.iloc[api_stn_num]
+            point_row = df[df['id'] == api_stn_name].index[0]
+            point = df.iloc[point_row]
         except:
             return None
-        df_meter = pd.DataFrame.from_dict(PiRequest(point['id'],"Flow").data)
+        # Case where the id is a CNRFC forecast point.
+        if "Fcst" in point['id']:
+            # Read the cnrfc forecast from the dummy-div that is passed into this function
+            df_cnrfc = pd.read_json(rfc_json_data, orient='index')
+
+            # The id's are in a string format like "R4 Fcst". Split it up by the space to get the station.
+            stn_number = point['id'].split(" ")[0]
+
+            # Rename the columns to match the PI data. The "Value" column is the value to graph (the stn_number).
+            df_meter = df_cnrfc.rename(columns={'GMT':'Timestamp',f"{stn_number}_fcst": "Value"})
+        else:
+            # If this isn't a forecast, get the data from a PI request.
+            df_meter = pd.DataFrame.from_dict(PiRequest("OPS",point['id'],"Flow").data)
 
         # Convert the Timestamp to a pandas datetime object and convert to Pacific time.
         df_meter.index = pd.to_datetime(df_meter.Timestamp).dt.tz_convert('US/Pacific')
         return df_meter
 
+    # Callback does two things. 1) Automatically refresh the hidden dataframes (in html) for PI data and
+    #                              the CNRFC data.
+    #                           2) Check to see if the "pi_checker.py" program is still running. Note: this
+    #                              updates the data-pi_checker_running component with a True/False, but the
+    #                              clientside callback (below this callback) actually updates the html in
+    #                              the sidebar, so the power-button icon turns red or green.
     @app.callback([Output(component_id='dummy-dataframe', component_property='children'),
-                   Output(component_id='dummy-rfc-dataframe', component_property='children')],
-                [Input('interval-component', 'n_intervals'),Input('dummy-rfc-dataframe', 'children')])
+                   Output(component_id='dummy-rfc-dataframe', component_property='children'),
+                   Output(component_id='dummy-output-timer', component_property='data-pi_checker_running')
+                   ],
+                [Input('interval-component', 'n_intervals'),
+                 Input('dummy-rfc-dataframe', 'children')])
     def get_new_data(value, current_rfc_df):
+        # Part (1) in description above, update dataframes
         df_refresh, df_refresh_rfc = update_data(meters, current_rfc_df)
+
+        # Part (2) in description above, check all processes running on system
+        pi_process = False
+        for p in psutil.process_iter():
+            if "python" in p.name():            # Any process that is python
+                for arg in p.cmdline():         # Check all python processes
+                    if "pi_checker" in arg:     # If "pi_checker" is in any of those, program is running.
+                        pi_process = True
+        #if not pi_process:
+            #send_mail("720*****","s*****@****.com","pi_checker.py is not running", "PI_CHEKER STATUS: OFF")
         return df_refresh.to_json(date_format='iso',orient='index'), \
-               df_refresh_rfc.to_json(date_format='iso',orient='index')
+               df_refresh_rfc.to_json(date_format='iso',orient='index'), pi_process
 
 
 
@@ -613,19 +297,29 @@ def main(meters):
         return
 
 
+    # Updates the "Last Updated:" section in the html header.
     app.clientside_callback(
         """
-        function(n_intervals){
-            var n = Date.now()
+        function(n_intervals, df, pi_checker_running){
+            console.log(pi_checker_running)
+            let df_obj = JSON.parse(df)
+            let last_item = Object.keys(df_obj).length-1
+            let last_timestring = df_obj[last_item]["Timestamp"]
+            var parseTime = d3.utcParse("%Y-%m-%dT%H:%M:%S.%LZ")
+            var last_timestamp = parseTime(last_timestring)
             var pretty_date = d3.timeFormat("%I:%M %p")
-            $("#updated_time").text(pretty_date(n))
-            return 
+            $("#updated_time").text(pretty_date(last_timestamp))
+            $("#pi_checker_status").attr('style',"color:red; text-shadow: 0px 0px 10px rgb(255 40 1 / 50%")
+            if(pi_checker_running){
+                $("#pi_checker_status").attr('style',"color:#8bff24; text-shadow: 0px 0px 10px rgb(40 255 1 / 50%")
+                }
+            return
         }
         """,
         Output(component_id='dummy-output-timer', component_property='children'),
-        [Input('interval-component', 'n_intervals'),]
+        [Input('interval-component', 'n_intervals'), Input("dummy-dataframe","children"),
+         Input("dummy-output-timer","data-pi_checker_running")]
     )
-
 
     @app.callback(
         Output(component_id="modal_header_text", component_property="children", ),
@@ -686,6 +380,7 @@ def main(meters):
                 opacity=0.7
             ),
             hoverinfo='text',
+            customdata=markers.id,
             text=[i for i in markers.name],
         ))
 
@@ -730,17 +425,6 @@ def main(meters):
 
         return fig
 
-
-    # app.clientside_callback(
-    # """
-    # function(meter){
-    #     $('#myModal').modal('toggle');
-    #     }
-    #     """,
-    #     Output(component_id="modal_body", component_property="children", ),
-    #     [Input(component_id="open_modal", component_property="n_clicks"), Input(component_id="close", component_property="n_clicks")],
-    # )
-
     app.clientside_callback(
         """
         function(alarmHi, alarmLo, div_id){
@@ -763,18 +447,21 @@ def main(meters):
 
 
     # Main graph -> individual graph
-    @app.callback(Output("histogram", "figure"), [Input("map-graph", "clickData")])
-    def make_individual_figure(main_graph_click):
+    @app.callback(Output("histogram", "figure"),
+                  [Input("map-graph", "clickData"), Input("dummy-rfc-dataframe","children")])
+    def make_individual_figure(main_graph_click, rfc_json_data):
         layout_individual = copy.deepcopy(layout)
+
         if main_graph_click is None:
             main_graph_click = {
                 "points": [
-                    {"curveNumber": 1, "pointNumber": 6, "text": "MIDDLE FORK AMERICAN RIVER NR FORESTHILL"}
+                    {"curveNumber": 1, "pointNumber": 6,
+                     "text": "MIDDLE FORK AMERICAN RIVER NR FORESTHILL", "customdata":"R4"}
                 ]
             }
 
-        chosen = [point["pointNumber"] for point in main_graph_click["points"]]
-        df_meter = produce_individual(chosen[0])
+        chosen = [point["customdata"] for point in main_graph_click["points"]]
+        df_meter = produce_individual(chosen[0], rfc_json_data)
 
         if df_meter is None:
             annotation = dict(
@@ -789,31 +476,44 @@ def main(meters):
             layout_individual["annotations"] = [annotation]
             data = []
         else:
+            future_data = dict()
+            if "Fcst" in chosen[0]:
+                # The CNRFC's forecast contains both actual data and a forecast (they push actual values
+                # into their forecast for some reason). So the idea here is to make two lines for the CNRFC data: One
+                # line for the actuals and another line for the forecast.
+
+                # Pandas dataframes where the index is time can be selected to include the data between, before, or
+                # after a certain time / date. This says: any data in the CNRFC data after current time is a forecast.
+                df_future = df_meter.loc[datetime.now(pytz.timezone('US/Pacific')):]
+                future_data = dict(
+                    type="scatter",
+                    mode="lines",
+                    name="Forecast Flow in CFS",
+                    x=df_future.index,
+                    y=df_future['Value'],
+                    line=dict(shape="spline", smoothing=1, width=1, color="#d11406"),
+                    marker=dict(symbol="diamond-open"),
+                    hovertemplate="%{x|%b-%d <br> %I:%M %p} <br> %{y}<extra></extra>",
+                )
+            # The default is to always plot at least one line, which will be this line.
             data = [
                 dict(
                     type="scatter",
                     mode="lines",
-                    name="Gas Produced (mcf)",
+                    name="Flow in CFS",
                     x=df_meter.index,
                     y=df_meter['Value'],
                     line=dict(shape="spline", smoothing=1, width=1, color="#1254b0"),
                     marker=dict(symbol="diamond-open"),
                     hovertemplate="%{x|%b-%d <br> %I:%M %p} <br> %{y}<extra></extra>",
-                )
+                ),
+                future_data
             ]
             layout_individual["title"] = main_graph_click['points'][0]['text']
             layout_individual["template"] = "plotly_dark"
 
         figure = go.Figure(data=data, layout=layout_individual)
         return figure
-
-
-    # Triggered when type pull down selected. This will then populate the "IDS" of the alert ID options
-    @app.callback(
-        Output('alert_id', 'options'),
-        [Input('alert_type', 'value')])
-    def set_alert_options(selected_type):
-        return [{'label': i, 'value': i} for i in map_meter_options[selected_type]]
 
 
     # Triggered from "def set_alert_options" since it will send over all the options for a given type. The default
@@ -825,15 +525,47 @@ def main(meters):
         return available_options[0]['value']
 
     @app.callback(
-        [Output('r4sparkline','figure'), Output('r30sparkline','figure')],
+        Output('oxbow_sparkline', 'figure'),
+        [Input("oxbow_sparkline", "figure"),
+         Input("dummy-dataframe","children"),
+        Input("ox_switch_span", "n_clicks")]
+    )
+    def add_oxbow_forecast(figure, json_data, n_clicks):
+        ctx = dash.callback_context
+
+        # The ID triggering the callback
+        toggle_id = ctx.triggered[0]['prop_id'].split('.')[0]
+        df_full = pd.read_json(json_data, orient='index')
+        df_full.Timestamp = df_full['Timestamp'].dt.tz_convert('US/Pacific')
+
+        # Initial Load, don't show forecast
+        if toggle_id == 'dummy-dataframe' and len(figure['data'])<2:
+            figure['data'].append(
+                dict(x=df_full["Timestamp"], y=df_full["Oxbow_Forecast"],
+                              mode='lines',
+                              visible=False,
+                              hovertemplate="%{x|%b-%d <br> %I:%M %p} <br> %{y}<extra></extra>", ))
+        if n_clicks % 2 and len(figure['data']) > 0:
+            figure['data'][1]['visible'] = True
+        else:
+            figure['data'][1]['visible'] = False
+
+        return figure
+
+
+    @app.callback(
+        [Output('r4sparkline','figure'), Output('r30sparkline','figure'),
+         Output('cnrfc_timestamp_r4','children'), Output('cnrfc_timestamp_r4','style'),
+         Output('cnrfc_timestamp_r30','children'), Output('cnrfc_timestamp_r30','style')],
         [Input("cnrfc_switch_span","n_clicks"), Input("r4sparkline", "figure"),
          Input("cnrfc_switch_span_r30","n_clicks"), Input("r30sparkline", "figure"),
          Input("dummy-dataframe","children"), Input("dummy-rfc-dataframe","children"),
+         Input('cnrfc_timestamp_r4','children'),
          Input('interval-component', 'n_intervals')
          ],
     )
     def flow_sparklines(r4_n_clicks, r4figure, r30_n_clicks, r30figure,
-                        json_data, rfc_json_data, n_intervals):
+                        json_data, rfc_json_data, cnrfc_timestamp, n_intervals):
         '''
         Purpose: This function will be triggered in one of two ways:
                  (1) Interval update: This will completely redraw the graph by ingesting the info in the dummy div.
@@ -847,6 +579,7 @@ def main(meters):
         :param r30figure:       Graph data for r30
         :param json_data:       PI data in json format from the dummy-dataframe div
         :param rfc_json_data:   cnrfc data in json format from dummy-rfc-dataframe div
+        :param cnrfc_timestamp  Issued date of CNRFC forecast.
         :param n_intervals:     number of times the interval has been triggered.
         :return:                Returns the r4 and r30 figure.
         '''
@@ -880,15 +613,19 @@ def main(meters):
             # Get the data stored in the 'dummy-dataframe' div. This should already be loaded
             try:
                 df_full = pd.read_json(json_data, orient='index')
-                df_full.Timestamp = df_full['Timestamp'].dt.tz_convert('US/Pacific')
 
                 df_cnrfc = pd.read_json(rfc_json_data, orient='index')
-                df_cnrfc.GMT = pd.to_datetime(df_cnrfc.GMT).dt.tz_convert('US/Pacific')
-
             # If it's not loaded, reload it.
             except ValueError:
                 print("DATA NOT FOUND, RELOADING. PLEASE CHECK WHY")
                 df_full, df_cnrfc = update_data(meters, rfc_json_data)
+
+            # Convert all datetimes to US/Pacific
+            df_full.Timestamp = df_full['Timestamp'].dt.tz_convert('US/Pacific')
+            df_cnrfc.GMT = pd.to_datetime(df_cnrfc.GMT).dt.tz_convert('US/Pacific')
+            df_cnrfc.FORECAST_ISSUED = pd.to_datetime(df_cnrfc.FORECAST_ISSUED).dt.tz_convert('US/Pacific')
+
+            cnrfc_timestamp = f" Fcst Issued: {(df_cnrfc['FORECAST_ISSUED'][1]).strftime('%a, %-d %b %-I %p')}"  # The entire FORECAST_ISSUED column is the same value.
 
             figR4 = go.Figure(
                 {
@@ -923,15 +660,19 @@ def main(meters):
             try:
                 cnrfc_r4_visible = False
                 cnrfc_r30_visible = False
+                r4_timestamp_display = "none"
+                r30_timestamp_display = "none"
                 if r4_n_clicks % 2 and len(r4figure['data'])>0:
                     # Check to make sure the CNRFC data actually loaded. If it did, it will
                     # be trace1 in the data
                     cnrfc_r4_visible= True
-                    # R30 checks
+                    r4_timestamp_display = "block"
+                # R30 checks
                 if r30_n_clicks % 2 and len(r30figure['data']) > 0:
                     # Check to make sure the CNRFC data actually loaded. If it did, it will
                     # be trace1 in the data
                     cnrfc_r30_visible = True
+                    r30_timestamp_display = "block"
                 figR4.add_scatter(x=df_cnrfc["GMT"], y=df_cnrfc["R4_fcst"], mode='lines',
                                   visible=cnrfc_r4_visible,
                                 hovertemplate="%{x|%b-%d <br> %I:%M %p} <br> %{y}<extra></extra>", )
@@ -940,11 +681,23 @@ def main(meters):
                                   hovertemplate="%{x|%b-%d <br> %I:%M %p} <br> %{y}<extra></extra>", )
             except:
                 print("CNRFC data unavail")
-            return figR4, figR30
+                r4_timestamp_display = "none"
+                r30_timestamp_display = "none"
+            r4_timestamp_style = {"background-color": "gray",
+                                   "position": "absolute",
+                                   "left": "0px", "right": "0px",
+                                   "bottom": "0px", "display": r4_timestamp_display}
+            r30_timestamp_style = {"background-color": "gray",
+                                   "position": "absolute",
+                                   "left": "0px", "right": "0px",
+                                   "bottom": "0px", "display":r30_timestamp_display}
+            return figR4, figR30, cnrfc_timestamp, r4_timestamp_style, cnrfc_timestamp, r30_timestamp_style
 
         # Not initial load and triggered via user toggle switch. It's possible this entire section could be
         # removed and you could just redraw the graph just as quickly every time.
         toggle_id = ctx.triggered[0]['prop_id'].split('.')[0]
+        r4_timestamp_display = "none"
+        r30_timestamp_display = "none"
         try:
             # Toggle is on (since it starts "off", n_clicks will be an odd val when toggle is "on")
             # R4 check
@@ -952,24 +705,44 @@ def main(meters):
                 # Check to make sure the CNRFC data actually loaded. If it did, it will
                 # be trace1 in the data
                 r4figure['data'][1]['visible']=True
+                r4_timestamp_display = "block"
             # Toggle is off
             else:
                 if len(r4figure['data'])>0:
                     r4figure['data'][1]['visible'] = False
+                    r4_timestamp_display = "none"
 
             # R30 checks
             if r30_n_clicks % 2 and len(r30figure['data'])>0:
                 # Check to make sure the CNRFC data actually loaded. If it did, it will
                 # be trace1 in the data
                 r30figure['data'][1]['visible']=True
+                r30_timestamp_display = "block"
             # Toggle is off
             else:
                 if len(r30figure['data'])>0:
                     r30figure['data'][1]['visible'] = False
-            return r4figure, r30figure
+                    r30_timestamp_display = "none"
+            r4_timestamp_style = {"background-color": "gray",
+                                  "position": "absolute",
+                                  "left": "0px", "right": "0px",
+                                  "bottom": "0px", "display": r4_timestamp_display}
+            r30_timestamp_style = {"background-color": "gray",
+                                   "position": "absolute",
+                                   "left": "0px", "right": "0px",
+                                   "bottom": "0px", "display": r30_timestamp_display}
+            return r4figure, r30figure, cnrfc_timestamp, r4_timestamp_style, cnrfc_timestamp, r30_timestamp_style
         except IndexError:
             print("CNRFC plot not loaded")
-            return r4figure, r30figure
+            r4_timestamp_style = {"background-color": "gray",
+                                  "position": "absolute",
+                                  "left": "0px", "right": "0px",
+                                  "bottom": "0px", "display": "none"}
+            r30_timestamp_style = {"background-color": "gray",
+                                   "position": "absolute",
+                                   "left": "0px", "right": "0px",
+                                   "bottom": "0px", "display": "none"}
+            return r4figure, r30figure, cnrfc_timestamp, r4_timestamp_style, cnrfc_timestamp, r30_timestamp_style
 
     # Interval update for Abay graphs
     @app.callback(
@@ -999,11 +772,16 @@ def main(meters):
 def update_data(meters, rfc_json_data):
     # This will store the data for all the PI requests
     df_all = pd.DataFrame()
-    meters = [PiRequest("R4", "Flow"), PiRequest("R11", "Flow"),
-              PiRequest("R30", "Flow"), PiRequest("Afterbay", "Elevation"),
-              PiRequest("Afterbay", "Elevation Setpoint"),
-              PiRequest("Middle Fork", "Power - (with Ralston)"),
-              PiRequest("Oxbow", "Power")]
+
+    meters = [PiRequest("OPS", "R4", "Flow"), PiRequest("OPS", "R11", "Flow"),
+              PiRequest("OPS", "R30", "Flow"), PiRequest("OPS", "Afterbay", "Elevation"),
+              PiRequest("OPS", "Afterbay", "Elevation Setpoint"),
+              PiRequest("OPS", "Oxbow", "Power"),
+              PiRequest("Energy_Marketing", None, "GEN_MDFK_and_RA"),
+              PiRequest("Energy_Marketing", None, "ADS_MDFK_and_RA"),
+              PiRequest("Energy_Marketing", None, "ADS_Oxbow"),
+              PiRequest("Energy_Marketing", None, "Oxbow_Forecast")
+                ]
     for meter in meters:
         try:
             df_meter = pd.DataFrame.from_dict(meter.data)
@@ -1022,6 +800,10 @@ def update_data(meters, rfc_json_data):
 
             # Rename the column (this was needed if we wanted to merge all the Value columns into a dataframe)
             renamed_col = (f"{meter.meter_name}_{meter.attribute}").replace(' ', '_')
+
+            # For attributes in the Energy Marketing folder, the name is "None", so just use attribute
+            if meter.meter_name is None:
+                renamed_col = (f"{meter.attribute}").replace(' ', '_')
             df_meter.rename(columns={"Value": f"{renamed_col}"}, inplace=True)
 
             if df_all.empty:
@@ -1044,14 +826,19 @@ def update_data(meters, rfc_json_data):
         yesterday12z = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d12")
         file_dates = [yesterday12z, today12z]
         df_cnrfc_list = []
+        most_recent_file = None
         for file in file_dates:
             try:
                 df_cnrfc_list.append(pd.read_csv(f"https://www.cnrfc.noaa.gov/csv/{file}_american_csv_export.zip"))
+                most_recent_file = file  # The date last file successfully pulled.
             except HTTPError as error:
                 print(f'CNRFC HTTP Request failed {error} for {file}')
 
         # The last element in the list will be the most current forecast. Get that one.
         df_cnrfc = df_cnrfc_list[-1].copy()
+
+        # Put the forecast issued time in the dataframe so we can refer to it later.
+        df_cnrfc["FORECAST_ISSUED"] = pd.to_datetime(datetime.strptime(most_recent_file, "%Y%m%d%H"))
 
         # Drop first row (the header is two rows and the 2nd row gets put into row 1 of the df; delete it)
         df_cnrfc = df_cnrfc.iloc[1:]
@@ -1059,8 +846,8 @@ def update_data(meters, rfc_json_data):
         # Convert the Timestamp to a pandas datetime object and convert to Pacific time.
         df_cnrfc.GMT = pd.to_datetime(df_cnrfc.GMT).dt.tz_localize('UTC').dt.tz_convert('US/Pacific')
 
-        df_cnrfc.rename(columns={"MFAC1L": "R20_fcst", "RUFC1": "R30_fcst", "MFPC1": "R4_fcst"}, inplace=True)
-        df_cnrfc[["R20_fcst", "R30_fcst", "R4_fcst"]] = df_cnrfc[["R20_fcst", "R30_fcst", "R4_fcst"]].apply(
+        df_cnrfc.rename(columns={"MFAC1L": "R20_fcst", "RUFC1": "R30_fcst", "MFPC1": "R4_fcst", "MFAC1": "R11_fcst"}, inplace=True)
+        df_cnrfc[["R20_fcst", "R30_fcst", "R4_fcst", "R11_fcst"]] = df_cnrfc[["R20_fcst", "R30_fcst", "R4_fcst", "R11_fcst"]].apply(
             pd.to_numeric) * 1000
     else:
         df_cnrfc = pd.read_json(rfc_json_data, orient='index')
