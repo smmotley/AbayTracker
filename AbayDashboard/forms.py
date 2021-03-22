@@ -88,7 +88,7 @@ class UserProfileForm(forms.ModelForm):
         if any(p is not None for p in mms_info): # There is at least one value
             if any(mm is None for mm in mms_info):   # There is at least one blank
                 raise ValidationError(
-                    "Please enter BOTH phone and provider information."
+                    "Please enter both phone AND provider information."
                 )
         return self.cleaned_data
 

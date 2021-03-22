@@ -1,4 +1,5 @@
-
+<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" crossorigin="anonymous">
+{% load static %}
 {% block content %}
     <style>
     body{
@@ -6,6 +7,7 @@
         background-repeat: no-repeat;
         background-attachment: fixed;
         background-size: cover;
+        font-family: Roboto_Condensed, Oxygen-Sans,Ubuntu,Cantarell,"Helvetica Neue",sans-serif;
     }
     .login{
         margin-top: 100px;
@@ -16,7 +18,7 @@
          border-radius: 0 0 5px 5px;
     }
     .login .card-action{
-        background: rgba(2, 48, 114, 0.6);
+        background-color: rgba(2, 48, 114, 0.6) !important;
         border-radius: 5px 5px 0 0;
     }
     .login label{
@@ -36,15 +38,33 @@
         font-weight: bold;
         color: #ccc
     }
+    .white-text {
+    color: #fff!important;
+    }
+    .card .card-content {
+    padding: 24px;
+    border-radius: 0 0 2px 2px;
+}
+    .card .card-action {
+    background-color: inherit;
+    border-top: 1px solid rgba(160,160,160,0.2);
+    position: relative;
+    padding: 16px 24px;
+}
+    h3 {
+    font-size: 2.92rem;
+    line-height: 110%;
+    margin: 1.9466666667rem 0 1.168rem 0;
+}
     </style>
     <div class="row login">
-        <div class="col s12 l4 offset-l4" style="width: auto">
+        <div class="col-12 col-sm-12 col-lg-4 offset-lg-4" style="width: auto">
             <div class="card">
                 <div class="card-action white-text">
                     <h3>Login</h3>
                 </div>
 
-                <div class="card-content">
+                <div class="card-body">
                      <form method = "POST">
                         {%  csrf_token %}
                         {{ form.as_p }}

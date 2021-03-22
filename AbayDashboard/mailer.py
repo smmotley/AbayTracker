@@ -11,7 +11,7 @@ def send_mail(user_phone, user_email, email_text, email_subject):
         subject=email_subject,
         body=email_text,
         from_email=EMAIL_HOST_USER,
-        bcc=[user_email, f"{user_phone}@mms.att.net"],
+        bcc=[user_email, f"{user_phone}"],
     )
     #msg.attach_file(file_attachement1)
     msg.send(fail_silently=False)

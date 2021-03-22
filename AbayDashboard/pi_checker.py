@@ -245,14 +245,14 @@ def send_alerts():
             user_profile = Profile.objects.get(user__id=alert.user_id)
             user_phone = user_profile.phone_number
             user_email = user_profile.user.email
-            user_carrier = user_profile.user.carrier
+            user_carrier = user_profile.phone_carrier
             mms = f"{user_phone}{carrier_dict[user_carrier]}"
             pretty_name = (alert.alarm_trigger.split('_')[0]).upper()
             email_body = f"{alert.alarm_trigger} triggered this alert \n" \
                          f"Current Value: {alert.trigger_value} \n" \
                          f"Your threshold: {alert.alarm_setpoint}"
             email_subject = f"PCWA Alarm For {pretty_name}"
-            send_mail(user_phone, user_email, email_body, email_subject)
+            send_mail(mms, user_email, email_body, email_subject)
             Issued_Alarms.objects.filter(id=alert.id).update(alarm_sent=True)
     return
 

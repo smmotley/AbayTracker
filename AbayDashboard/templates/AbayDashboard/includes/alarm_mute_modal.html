@@ -200,7 +200,6 @@ alarm_time_toggle.addEventListener('change', function() {
             type: $(this).attr('method'), // GET or POST
             url: $(this).attr('action'), // the file to call
             success: function(response) { // on success..
-                console.log("SUCCESS", response.msg)
                 $("#alarm_on_off > i")
                     .attr('style', "color: #818896; text-shadow: none;") // Alarm Turned off
 

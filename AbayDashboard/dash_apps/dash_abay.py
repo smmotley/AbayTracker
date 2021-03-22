@@ -21,7 +21,7 @@ from htexpr import compile
 import dash_daq as daq
 from scipy import stats
 import json
-from .dash_abay_extras.layout import top_cards
+from .dash_abay_extras.layout import top_cards, main_layout
 from ..mailer import send_mail
 import psutil
 
@@ -161,81 +161,7 @@ def main(meters):
 
     top_row_cards = top_cards(df_all, df_hourly_resample)
 
-    app.layout = html.Main(
-        className='content container',
-        children=[
-            top_row_cards,
-            dbc.Row([html.Div(
-                className="div-for-dropdown ml-2 col-sm-4 col-md-4 col-lg-4",
-                children=[
-                    dcc.DatePickerSingle(
-                        id="date-picker",
-                        min_date_allowed=dt(2018, 4, 1),
-                        max_date_allowed=dt.now().date(),
-                        initial_visible_month=dt.now().date(),
-                        date=dt.now().date(),
-                        display_format="MMMM D, YYYY",
-                    )
-                ],
-            ),
-                # Change to side-by-side for mobile layout
-                html.Div(
-                    className="div-for-dropdown ml-2 col-sm-4 col-md-4 col-lg-3",
-                    children=[
-                        # Dropdown for locations on map
-                        dcc.Dropdown(
-                            id="alert-dropdown",
-                            options=[
-                                {"label": i, "value": i}
-                                for i in locations_types
-                            ],
-                            placeholder="Select meter",
-                        )
-                    ],
-                ),
-                html.Div(
-                    className="div-for-dropdown col-sm-3 col-md-3 col-lg-3",
-                    children=[
-                        # Dropdown to select times
-                        dcc.Dropdown(
-                            id="mapbox_layer_dropdown",
-                            options=[
-                                {
-                                    "label": key,
-                                    "value": value,
-                                }
-                                for key, value in mapbox_layers.items()
-                            ],
-                            multi=True,
-                            placeholder="Map Layers",
-                        )
-                    ],
-                ),
-            ], className="col-lg-6 col-md-12 col-sm-12 no-gutters"),
-            dbc.Row([html.Div([dcc.Graph(id="map-graph")], className='col-sm-12 col-md-12 col-lg-6 mb-3 pr-md-2'),
-                     html.Div(dcc.Loading(
-                                id='loading_graph',
-                                parent_className='loading_wrapper',
-                                children=[html.Div([dcc.Graph(id="histogram")])],
-                                type="circle",
-                                ), className='col-sm-12 col-md-12 col-lg-6 mb-3 pr-md-2'
-                            )
-            ], className="no-gutters"),
-            html.Div(id='dummy-output'),
-            html.Div(id='dummy-output-timer', **{'data-pi_checker_running': "true"},),
-            # This div will store our dataframe with all the PI data. It's a way for the
-            # callbacks to share data
-            html.Div(id='dummy-dataframe', style={'display':'none'}),
-            html.Div(id='dummy-rfc-dataframe', style={'display': 'none'}),
-            # This is a dummy id to allow the app to perform an update at a given interval
-            dcc.Interval(
-                id='interval-component',
-                interval=1 * 60000,  # in milliseconds (60 seconds)
-                #max_intervals=0,
-                n_intervals=0
-            ),
-        ]
-    )
+    app.layout = main_layout(top_row_cards, locations_types)
 
     # A function to plot the main graph.
     def produce_individual(api_stn_name, rfc_json_data):
@@ -589,7 +515,7 @@ def main(meters):
         toggle_id = ctx.triggered[0]['prop_id'].split('.')[0]
 
         # Is this an initial load or an update sent by interval update
-        if toggle_id == 'dummy-dataframe' or toggle_id == 'interval-component':      # Call back not hit by switch, redraw graph
+        if toggle_id == 'dummy-dataframe' or toggle_id == 'interval-component':   # Call back not hit by switch, redraw graph
             layout = dict(
                 margin= dict(l=0, r=0, t=4, b=4, pad=0),
                 xaxis= dict(
@@ -746,7 +672,8 @@ def main(meters):
 
     # Interval update for Abay graphs
     @app.callback(
-        [Output('my-tank2', 'value'), Output('my-tank2', 'max'), Output("abay_bargraph", 'figure')],
+        [Output('my-tank2', 'value'), Output('my-tank2', 'max'),
+         Output("abay_bargraph", 'figure'), Output("abay_float_txt", 'children')],
         [Input("dummy-dataframe", "children"), Input("abay_bargraph", "figure"),
          Input('interval-component', 'n_intervals')],
     )
@@ -755,6 +682,7 @@ def main(meters):
         df_full.Timestamp = df_full['Timestamp'].dt.tz_convert('US/Pacific')
         value = round(df_full["Afterbay_Elevation"].iloc[-1], 1),
         max = df_full["Afterbay_Elevation_Setpoint"].values.max()
+        abay_float = f" Float: {int(df_full['Afterbay_Elevation_Setpoint'].iloc[-1])}'"
 
         df_full_hourly = df_full.resample('60min', on="Timestamp").mean()
 
@@ -766,7 +694,7 @@ def main(meters):
         figure['data'][1]['x'] = df_full_hourly.index[-10:].to_numpy()
         figure['data'][1]['y'] = df_full_hourly['Afterbay_Elevation_Setpoint'][-10:].to_numpy() - df_full_hourly["Afterbay_Elevation"][-10:].to_numpy()
 
-        return value, max, figure
+        return value, max, figure, abay_float
 
 
 def update_data(meters, rfc_json_data):

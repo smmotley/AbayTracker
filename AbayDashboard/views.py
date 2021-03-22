@@ -261,7 +261,7 @@ def login_request(request):
                 # Redirect them to any page ("") will redirect them to the homepage
                 # "main:homepage" goes into urls.py, looks for the app_name="main" and
                 # then finds the link associated with name="homepage"
-                return redirect("AbayDashboard:dashboard")
+                return redirect("AbayDashboard:dash_django")
             else:
                 messages.error(request, "Invalid username or password")
         else:
