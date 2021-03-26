@@ -8,7 +8,7 @@ from zipfile import ZipFile
 import copy
 import requests
 from urllib.error import HTTPError
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time, timezone
 import pytz
 import numpy as np
 from django.contrib.staticfiles.storage import staticfiles_storage
@@ -21,9 +21,11 @@ from htexpr import compile
 import dash_daq as daq
 from scipy import stats
 import json
-from .dash_abay_extras.layout import top_cards, main_layout
+#from .dash_abay_extras.layout import top_cards, main_layout
+from .dash_abay_extras.layout_new import top_cards, second_cards, main_layout
 from ..mailer import send_mail
 import psutil
+import logging
 
 # ###To run the app on it's own (not in Django), you would do:
 # app = dash.Dash()
@@ -46,11 +48,12 @@ import psutil
 class PiRequest:
     #
     # https://flows.pcwa.net/piwebapi/assetdatabases/D0vXCmerKddk-VtN6YtBmF5A8lsCue2JtEm2KAZ4UNRKIwQlVTSU5FU1NQSTJcT1BT/elements
-    def __init__(self, db, meter_name, attribute):
+    def __init__(self, db, meter_name, attribute, forecast=False):
         self.db = db  # Database (e.g. "Energy Marketing," "OPS")
         self.meter_name = meter_name  # R4, Afterbay, Ralston
         self.attribute = attribute  # Flow, Elevation, Lat, Lon, Storage, Elevation Setpoint, Gate 1 Position, Generation
         self.baseURL = 'https://flows.pcwa.net/piwebapi/attributes'
+        self.forecast = forecast
         self.meter_element_type = self.meter_element_type()  # Gauging Stations, Reservoirs, Generation Units
         self.url = self.url()
         self.data = self.grab_data()
@@ -83,11 +86,14 @@ class PiRequest:
         # Now that we have the url for the PI data, this request is for the actual data. We will
         # download data from the beginning of the water year to the current date. (We can't download data
         # past today's date, if we do we'll get an error.
+        end_time = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:00-00:00")
+        if self.forecast:
+            end_time = (datetime.utcnow() + timedelta(hours=72)).strftime("%Y-%m-%dT%H:%M:00-00:00")
         try:
             response = requests.get(
                 url=self.url,
                 params={"startTime": (datetime.utcnow() + timedelta(hours=-24)).strftime("%Y-%m-%dT%H:%M:00-00:00"),
-                        "endTime": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:00-00:00"),
+                        "endTime": end_time,
                         "interval": "1m",
                         },
             )
@@ -96,6 +102,7 @@ class PiRequest:
             # We only want the "Items" object.
             return j["Items"]
         except requests.exceptions.RequestException:
+            logging.warning(f"HTTP Failed For {self.meter_name} | {self.attribute}")
             print('HTTP Request failed')
             return None
 
@@ -104,9 +111,9 @@ class PiRequest:
             return None
         if self.attribute == "Flow":
             return "Gauging Stations"
-        if "Afterbay" in self.meter_name:
+        if "Afterbay" in self.meter_name or "Hell Hole" in self.meter_name:
             return "Reservoirs"
-        if "Middle Fork" or "Oxbow" in self.meter_name:
+        if "Middle Fork" in self.meter_name or "Oxbow" in self.meter_name:
             return "Generation Units"
 
 local = False
@@ -128,6 +135,8 @@ mapbox_access_token = "pk.eyJ1Ijoic21vdGxleSIsImEiOiJuZUVuMnBBIn0.xce7KmFLzFd9PZ
 
 
 def main(meters):
+    logging.basicConfig(filename='abay_err.log', level=logging.DEBUG)
+    logging.info(f"Starting: {datetime.now().strftime('%a, %-d %b %-I %p')}")
     # This will store the data for all the PI requests
     df_all, df_cnrfc = update_data(meters, None)
 
@@ -161,7 +170,9 @@ def main(meters):
 
     top_row_cards = top_cards(df_all, df_hourly_resample)
 
-    app.layout = main_layout(top_row_cards, locations_types)
+    second_row_cards = second_cards(df_all, df_hourly_resample)
+
+    app.layout = main_layout(top_row_cards, second_row_cards, locations_types)
 
     # A function to plot the main graph.
     def produce_individual(api_stn_name, rfc_json_data):
@@ -543,6 +554,7 @@ def main(meters):
                 df_cnrfc = pd.read_json(rfc_json_data, orient='index')
             # If it's not loaded, reload it.
             except ValueError:
+                logging.warning("The PI data or CNRFC data are not being stored in a DIV. Please check why")
                 print("DATA NOT FOUND, RELOADING. PLEASE CHECK WHY")
                 df_full, df_cnrfc = update_data(meters, rfc_json_data)
 
@@ -606,6 +618,7 @@ def main(meters):
                                    visible=cnrfc_r30_visible,
                                   hovertemplate="%{x|%b-%d <br> %I:%M %p} <br> %{y}<extra></extra>", )
             except:
+                logging.warning("CNRFC Data are unavail")
                 print("CNRFC data unavail")
                 r4_timestamp_display = "none"
                 r30_timestamp_display = "none"
@@ -659,6 +672,7 @@ def main(meters):
                                    "bottom": "0px", "display": r30_timestamp_display}
             return r4figure, r30figure, cnrfc_timestamp, r4_timestamp_style, cnrfc_timestamp, r30_timestamp_style
         except IndexError:
+            logging.warning("User tried to load CNRFC plot, but plot appears unavail")
             print("CNRFC plot not loaded")
             r4_timestamp_style = {"background-color": "gray",
                                   "position": "absolute",
@@ -696,6 +710,9 @@ def main(meters):
 
         return value, max, figure, abay_float
 
+    logging.info(f"Done: {datetime.now().strftime('%a, %-d %b %-I %p')}")
+    # Callback for Abay Forecast
+
 
 def update_data(meters, rfc_json_data):
     # This will store the data for all the PI requests
@@ -704,11 +721,11 @@ def update_data(meters, rfc_json_data):
     meters = [PiRequest("OPS", "R4", "Flow"), PiRequest("OPS", "R11", "Flow"),
               PiRequest("OPS", "R30", "Flow"), PiRequest("OPS", "Afterbay", "Elevation"),
               PiRequest("OPS", "Afterbay", "Elevation Setpoint"),
-              PiRequest("OPS", "Oxbow", "Power"),
+              PiRequest("OPS", "Oxbow", "Power"), PiRequest("OPS","R5","Flow"),
+              PiRequest("OPS","Hell Hole","Elevation"),
               PiRequest("Energy_Marketing", None, "GEN_MDFK_and_RA"),
               PiRequest("Energy_Marketing", None, "ADS_MDFK_and_RA"),
               PiRequest("Energy_Marketing", None, "ADS_Oxbow"),
-              PiRequest("Energy_Marketing", None, "Oxbow_Forecast")
                 ]
     for meter in meters:
         try:
@@ -724,7 +741,7 @@ def update_data(meters, rfc_json_data):
             df_meter.index.names = ['index']
 
             # Remove any outliers or data spikes
-            # df_meter = drop_numerical_outliers(df_meter, meter, z_thresh=3)
+            df_meter = drop_numerical_outliers(df_meter, meter, z_thresh=3)
 
             # Rename the column (this was needed if we wanted to merge all the Value columns into a dataframe)
             renamed_col = (f"{meter.meter_name}_{meter.attribute}").replace(' ', '_')
@@ -739,9 +756,30 @@ def update_data(meters, rfc_json_data):
             else:
                 df_all = pd.merge(df_all, df_meter[["Timestamp", renamed_col]], on="Timestamp", how='outer')
 
-        except ValueError:
+        except ValueError as e:
             print('Pandas Dataframe May Be Empty')
+            logging.warning(f"Updating PI data produced empty data frame. Error: {e}")
             return None
+
+    # PMIN / PMAX Calculations
+    const_a = 0.09      # Default is 0.0855.
+    const_b = 0.135422  # Default is 0.138639
+    try:
+        df_all["Pmin1"] = const_a*(df_all["R4_Flow"]-df_all["R5_Flow"])
+        df_all["Pmin2"] = (-0.14*(df_all["R4_Flow"]-df_all["R5_Flow"])*
+                              ((df_all["Hell_Hole_Elevation"]-2536)/(4536-2536)))
+        df_all["Pmin"] = df_all[["Pmin1","Pmin2"]].max(axis=1)
+
+        df_all["Pmax1"] = ((const_a+const_b)/const_b)*(124+(const_a*df_all["R4_Flow"]-df_all["R5_Flow"]))
+        df_all["Pmax2"] = ((const_a+const_b)/const_a)*(86-(const_b*df_all["R4_Flow"]-df_all["R5_Flow"]))
+
+        df_all["Pmax"] = df_all[["Pmax1","Pmax2"]].min(axis=1)
+
+        df_all.drop(["Pmin1","Pmin2", "Pmax1", "Pmax2"], axis=1, inplace=True)
+    except ValueError as e:
+        print("Can Not Calculate Pmin or Pmax")
+        df_all[["Pmin", "Pmax"]] = np.nan
+        logging.info(f"Unable to caluclate Pmin or Pmax {e}")
 
     # The first time this code is hit, the div containing the data should not have the
     # CNRFC data in it. Therefore, we need to download it.
@@ -760,26 +798,80 @@ def update_data(meters, rfc_json_data):
                 df_cnrfc_list.append(pd.read_csv(f"https://www.cnrfc.noaa.gov/csv/{file}_american_csv_export.zip"))
                 most_recent_file = file  # The date last file successfully pulled.
             except HTTPError as error:
+                logging.warning(f'CNRFC HTTP Request failed {error} for {file}. Error code: {error}')
                 print(f'CNRFC HTTP Request failed {error} for {file}')
 
         # The last element in the list will be the most current forecast. Get that one.
         df_cnrfc = df_cnrfc_list[-1].copy()
 
-        # Put the forecast issued time in the dataframe so we can refer to it later.
-        df_cnrfc["FORECAST_ISSUED"] = pd.to_datetime(datetime.strptime(most_recent_file, "%Y%m%d%H"))
+        # Case for failed download and empty dataframe
+        if df_cnrfc.empty:
+            df_cnrfc = pd.date_range(start=datetime.utcnow() - timedelta(hours=48),
+                                     end= datetime.utcnow() + timedelta(hours=72), freq='H', normalize=True)
+            df_cnrfc[["FORECAST_ISSUED", "R20_fcst", "R30_fcst", "R4_fcst", "R11_fcst"]] = np.nan
 
-        # Drop first row (the header is two rows and the 2nd row gets put into row 1 of the df; delete it)
-        df_cnrfc = df_cnrfc.iloc[1:]
+        # Download was successful, continue
+        else:
+            # Put the forecast issued time in the dataframe so we can refer to it later.
+            df_cnrfc["FORECAST_ISSUED"] = pd.to_datetime(datetime.strptime(most_recent_file, "%Y%m%d%H"))
 
-        # Convert the Timestamp to a pandas datetime object and convert to Pacific time.
-        df_cnrfc.GMT = pd.to_datetime(df_cnrfc.GMT).dt.tz_localize('UTC').dt.tz_convert('US/Pacific')
+            # Drop first row (the header is two rows and the 2nd row gets put into row 1 of the df; delete it)
+            df_cnrfc = df_cnrfc.iloc[1:]
 
-        df_cnrfc.rename(columns={"MFAC1L": "R20_fcst", "RUFC1": "R30_fcst", "MFPC1": "R4_fcst", "MFAC1": "R11_fcst"}, inplace=True)
-        df_cnrfc[["R20_fcst", "R30_fcst", "R4_fcst", "R11_fcst"]] = df_cnrfc[["R20_fcst", "R30_fcst", "R4_fcst", "R11_fcst"]].apply(
-            pd.to_numeric) * 1000
+            # Convert the Timestamp to a pandas datetime object and convert to Pacific time.
+            df_cnrfc.GMT = pd.to_datetime(df_cnrfc.GMT).dt.tz_localize('UTC').dt.tz_convert('US/Pacific')
+
+            df_cnrfc.rename(columns={"MFAC1L": "R20_fcst", "RUFC1": "R30_fcst", "MFPC1": "R4_fcst", "MFAC1": "R11_fcst"}, inplace=True)
+            df_cnrfc[["R20_fcst", "R30_fcst", "R4_fcst", "R11_fcst"]] = df_cnrfc[["R20_fcst", "R30_fcst", "R4_fcst", "R11_fcst"]].apply(
+                pd.to_numeric) * 1000
+    # Dataframe already exists in html
     else:
         df_cnrfc = pd.read_json(rfc_json_data, orient='index')
     ######################## END CNRFC ###########################################
+
+    # Add in the remainder of any forecast data to the cnrfc dataframe
+    try:
+        # Download the data for the Oxbow and MFPH Forecast
+        pi_data_ox = PiRequest("OPS", "Oxbow", "Forecasted Generation")
+        # pi_data_gen = PiRequest("Energy_Marketing", None, "MFRA_Forecast", True)
+        df_fcst = pd.DataFrame.from_dict(pi_data_ox.data)
+        # This will need to be changed to the following:
+        #df_fcst["MFRA_fcst"] = pd.DataFrame.from_dict(pi_data_gen.data)['Value']
+        df_fcst["MFRA_fcst"] = pd.DataFrame.from_dict(pi_data_ox.data)['Value']
+
+        # Convert the Timestamp to a pandas datetime object and convert to Pacific time.
+        df_fcst.Timestamp = pd.to_datetime(df_fcst.Timestamp).dt.tz_convert('US/Pacific')
+        df_fcst.index = df_fcst.Timestamp
+        df_fcst.index.names = ['index']
+
+        df_fcst.rename(columns={"Value": "Oxbow_fcst"}, inplace=True)
+
+        # Resample the forecast to hourly to match CNRFC time. If this is not done, the following merge will fail.
+        df_fcst = df_fcst.resample('60min', on='Timestamp').mean()
+
+        # Merge the forecast to the CNRFC using the GMT column for the cnrfc and the index for the oxbow fcst data.
+        df_cnrfc = pd.merge(df_cnrfc, df_fcst[["Oxbow_fcst","MFRA_fcst"]],
+                            left_on="GMT", right_index=True, how='outer')
+
+        # Calculate the Pmin and Pmax in the same manner as with the historical data.
+        df_cnrfc["Pmin1"] = const_a * (df_cnrfc["R4_fcst"] - 26)
+        df_cnrfc["Pmin2"] = (-0.14 * (df_cnrfc["R4_fcst"] - 26) *
+                           ((df_all["Hell_Hole_Elevation"].iloc[-1] - 2536) / (4536 - 2536)))
+
+        df_cnrfc["Pmin"] = df_cnrfc[["Pmin1", "Pmin2"]].max(axis=1)
+
+        df_cnrfc["Pmax1"] = ((const_a + const_b) / const_b) * (124 + (const_a * df_cnrfc["R4_fcst"] - df_all["R5_Flow"].iloc[-1]))
+        df_cnrfc["Pmax2"] = ((const_a + const_b) / const_a) * (86 - (const_b * df_cnrfc["R4_fcst"] - df_all["R5_Flow"].iloc[-1]))
+
+        df_cnrfc["Pmax"] = df_cnrfc[["Pmax1", "Pmax2"]].min(axis=1)
+
+        # Drop unnesessary columns.
+        df_cnrfc.drop(["Pmin1", "Pmin2", "Pmax1", "Pmax2"], axis=1, inplace=True)
+        df_cnrfc = abay_forecast(df_cnrfc, df_all)
+    except Exception as e:
+        print(f"Could Not Find Metered Forecast Data (e.g. Oxbow Forecast): {e}")
+        df_cnrfc["Oxbow_fcst"] = np.nan
+        logging.warning(f"Could Not Find Metered Forecast Data (e.g. Oxbow Forecast). Error Message: {e}")
     return df_all, df_cnrfc
 
 
@@ -809,6 +901,103 @@ def drop_numerical_outliers(df, meter, z_thresh):
         print(f"A total of {orig_size - df.shape[0]} data spikes detected in {meter.meter_name}. "
               f" The data have been removed")
     return df
+
+
+def abay_forecast(df, df_pi):
+    # Default ratio of the contribution of total power that is going to Ralston.
+    RAtoMF_ratio = 0.41
+
+    # 1 cfs = 0.0826 acre feet per hour
+    cfs_to_afh = 0.0826448
+
+    CCS = False
+
+    # The last reading in the df for the float set point
+    float = df_pi["Afterbay_Elevation_Setpoint"].iloc[-1]
+
+    # The first timestamp we have for the forecast. This is probably not needed and can be deleted
+    # first_fcst_timestamp = df["GMT"].loc[df['Oxbow_fcst'].first_valid_index()]
+
+    #df_pi.set_index('Timestamp', inplace=True)
+    #abay_inital = df_pi["Afterbay_Elevation"].truncate(before=(datetime.now(timezone.utc)-timedelta(hours=24)))
+
+    # The PI data we retrieve goes back 24 hours. The initial elevation will give us a chance to test the expected
+    # abay elevation vs the actual abay elevation. The abay_initial is our starting point.
+    abay_inital_elev = df_pi["Afterbay_Elevation"].iloc[0]
+
+    # y = 0.6334393x^2 - 1409.2226x + 783,749
+    abay_inital_af = (0.6334393*(abay_inital_elev**2))-1409.2226*abay_inital_elev+783749
+
+    df["Oxbow_Outflow"] = (df["Oxbow_fcst"] * 163.73) + 83.956
+
+    df["RA_MW"] = np.minimum(86, df["MFRA_fcst"] * RAtoMF_ratio)
+    df["MF_MW"] = np.minimum(128, df["MFRA_fcst"]-df['RA_MW'])
+
+    # R5 Valve never changes (at least not in the last 5 years in PI data)
+    df["R5_Valve"] = 28
+
+    # If CCS is on, we need to account for the fact that Ralston will run at least at the requirement for the Pmin.
+    if CCS:
+        #df["RA_MW"] = max(df["RA_MW"], min(86,((df["R4_fcst"]-df["R5_Valve"])/10)*RAtoMF_ratio))
+        df["RA_MW"] = np.maximum(df["RA_MW"], df["Pmin"] * RAtoMF_ratio)
+
+    # Polynomial best fits for conversions
+    df["RA_Inflow"] = (0.005*(df["RA_MW"]**3))-(0.0423*(df["RA_MW"]**2))+(10.266*df["RA_MW"]) + 2.1879
+    df["MF_Inflow"] = (0.0049 * (df["MF_MW"] ** 2)) + (6.2631 * df["MF_MW"]) + 18.4
+
+    # The linear MW to CFS relationship above doesn't apply if Oxbow is 0 MW. In that case it's 0 (otherwise the
+    # value would be 83.956 due to the y=mx+b above where y = b when x is zero, we need y to = 0 too).
+    df.loc[df['MF_MW'] == 0, 'RA_Inflow'] = 0
+    df.loc[df['RA_MW'] == 0, 'MF_Inflow'] = 0
+
+    # It helps to look at the PI Vision screen for this.
+    # Ibay In: 1) Inflow from MFPH (the water that's powering MFPH)
+    #          2) The water flowing in at R4
+    # Ibay Out: 1) Valve above R5 (nearly always 28)         = 28
+    #           2) Outflow through tunnel to power Ralston.  = RA_out (CAN BE INFLUENCED BY CCS MODE, I.E. R4)
+    #           3) Spill                                     = (MF_IN - RA_OUT) + R4
+    #
+    #                                |   |
+    #                                |   |
+    #                                |   |
+    #                          _____MF INFLOW____
+    #                          |                |
+    #     OUTFLOW (RA INFLOW)  |                |  R4 INFLOW
+    #                    ------|            <---|--------
+    #               <--- ------|                |--------
+    #                          |                |
+    #                           ---SPILL+R5----
+    #                                |   |
+    #                R20             |   |
+    #                --------------- |   |
+    #                ---------------------
+    #
+    #           Inflow into IBAY  = MF_GEN_TO_CFS (via day ahead forecast --> then converted to cfs) + R4 Inflow
+    #             Inflow to ABAY  = RA_GEN_TO_CFS (either via DA fcst or R4 if CCS is on) + R20
+    #        Where RA_GEN_TO_CFS  = MF_GEN_TO_CFS * 0.41
+    #                         R20 = R20_RFC_FCST + SPILL + R5
+    #                       SPILL = R4_RFC_Fcst + MAX(0,(MF_GEN_TO_CFS - RA_GEN_TO_CFS)) + R5
+    #        THEREFORE:
+    #        Inflow Into Abay = RA_GEN_TO_CFS + R20_RFC_FCST + R4_RFC_fcst + AX(0,(MF_GEN_TO_CFS - RA_GEN_TO_CFS)) + R5
+    #
+    # Ibay In - Ibay Out = The spill that will eventually make it into Abay through R20.
+    df["Ibay_Spill"] = np.maximum(0,(df["MF_Inflow"] - df["RA_Inflow"])) + df["R5_Valve"] + df['R4_fcst']
+
+    # CNRFC is just forecasting natural flow, which I believe is just everything from Ibay down. Therefore, it should
+    # always be too low and needs to account for any water getting released from IBAY.
+    df["R20_fcst_adjusted"] = df["R20_fcst"] + df["Ibay_Spill"]
+
+    df["Abay_Inflow"] = df["RA_Inflow"]+df["R20_fcst_adjusted"]+df["R30_fcst"]
+    df["Abay_Outflow"] = df["Oxbow_Outflow"]
+
+    df["Abay_AF_Change"] = (df["Abay_Inflow"]-df["Abay_Outflow"])*cfs_to_afh
+    df["Abay_AF_Fcst"] = abay_inital_af + df["Abay_AF_Change"]
+
+    # y = -1.4663E-6x^2+0.019776718*x+1135.3
+    df["Abay_Elev_Fcst"] = np.minimum(float, (-0.0000014663 *
+                                             (df["Abay_AF_Fcst"] ** 2)+0.0197767158*df["Abay_AF_Fcst"]+1135.3))
+    return df
+
 
 if __name__ == 'AbayDashboard.dash_apps.dash_abay':
     # meters = [PiRequest("R4", "Flow"), PiRequest("R11", "Flow"),

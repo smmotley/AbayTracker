@@ -17,11 +17,12 @@ mapbox_layers = {
     }
 
 
-def main_layout(top_row_cards, locations_types):
+def main_layout(top_row_cards, second_row_cards, locations_types):
     main_html = html.Main(
         className='content container',
         children=[
             top_row_cards,
+            second_row_cards,
             dbc.Row([html.Div(
                 className="div-for-dropdown ml-2 col-sm-4 col-md-4 col-lg-4",
                 children=[
@@ -215,144 +216,7 @@ def top_cards(df_all, df_hourly_resample):
                     className='align-items-end mt-2'
                 )
             ], color="dark", inverse=True, className="h-100")],
-            className="col-sm-12 col-md-12 col-lg-3 mb-3 pr-md-2"
-        ),
-        html.Div([
-            dbc.Card([
-                dbc.CardHeader(
-                    children=[
-                        "Generation",
-                        html.Label(
-                            id="ox_fcst_switch",
-                            n_clicks=0,
-                            style={'float': 'right', 'margin-bottom': '0'},
-                            children=[
-                                dcc.Input(
-                                    type="checkbox",
-                                    id="oxbow_toggle",
-                                    className="c-switch-input",
-                                    value="",
-                                ),
-                                html.Span(
-                                    className="c-switch-slider",
-                                    id="ox_switch_span",
-                                    n_clicks=0,
-                                    **{'data-checked': "on",
-                                       'data-unchecked': "off"},
-                                ),
-                            ],
-                            className="c-switch c-switch-label c-switch-success c-switch-sm",
-                        )]
-                ),
-                dbc.CardBody(
-                    dbc.Row([
-                        dbc.Col(dbc.Row([
-                            dbc.Col("MFPH", width=12, className='text-uppercase text-tracked mb-2 text-nowrap'),
-                            dbc.Col(round(df_all["GEN_MDFK_and_RA"].iloc[-1], 1), width=12,
-                                    className='badge badge-success text-size-2 text-monospace mx-auto'),
-                            dbc.Col("Ox", width=12, className='text-uppercase text-tracked mt-2 text-nowrap'),
-                            dbc.Col(round(df_all["Oxbow_Power"].iloc[-1], 1), width=12,
-                                    className='badge badge-success text-size-2 text-monospace mx-auto'),
-                        ], className='gen_badge', style={"height": "30%", "top": "-10px"}), width=3),
-                        dbc.Col(
-                            # Row Classname of "h-100" is critical here, since the plots will only take up space that's
-                            # taken. But plotly plots are very stupid, for this to really work nicely, it's best to
-                            # explicitly say the height of the object. If you don't, the first item that draws will take
-                            # up the space in the column (so in this case, there are two graphs and the second one gets,
-                            # squished just enough to make it noticable.
-                            dbc.Row([
-                                dbc.Col(
-                                    dcc.Graph(
-                                        className="sparkline_graph h-100",
-                                        config={
-                                            "staticPlot": False,
-                                            "editable": False,
-                                            "displayModeBar": False,
-                                        },
-                                        figure=go.Figure(
-                                            {
-                                                "data": [
-                                                    {
-                                                        "x": df_all["Timestamp"],
-                                                        "y": df_all["GEN_MDFK_and_RA"],
-                                                        "mode": "lines",
-                                                        "name": "MFPH",
-                                                        "line": {"color": "#f4d44d"},
-                                                        "hovertemplate": "%{x|%b-%d <br> %I:%M %p} <br> %{y:.1f}<extra></extra>",
-                                                    }
-                                                ],
-                                                "layout": {
-                                                    "margin": dict(l=0, r=0, t=4, b=4, pad=0),
-                                                    "xaxis": dict(
-                                                        showline=False,
-                                                        showgrid=False,
-                                                        zeroline=False,
-                                                        showticklabels=False,
-                                                    ),
-                                                    "yaxis": dict(
-                                                        showline=False,
-                                                        showgrid=False,
-                                                        zeroline=False,
-                                                        showticklabels=False,
-                                                    ),
-                                                    "autosize": True,
-                                                    "height": 50,  # px
-                                                    "paper_bgcolor": "rgba(0,0,0,0)",
-                                                    "plot_bgcolor": "rgba(0,0,0,0)",
-                                                },
-                                            }
-                                        ),
-                                    ), width=11, className='sparkline'),
-                                dbc.Col(
-                                    dcc.Graph(
-                                        className="sparkline_graph h-100",
-                                        id="oxbow_sparkline",
-                                        config={
-                                            "staticPlot": False,
-                                            "editable": False,
-                                            "displayModeBar": False,
-                                        },
-                                        figure=go.Figure(
-                                            {
-                                                "data": [
-                                                    {
-                                                        "x": df_all["Timestamp"],
-                                                        "y": df_all["Oxbow_Power"],
-                                                        "mode": "lines",
-                                                        "name": "Oxbow",
-                                                        "line": {"color": "#f4d44d"},
-                                                        "hovertemplate": "%{x|%b-%d <br> %I:%M %p} <br> %{y:.1f}<extra></extra>",
-                                                    }
-                                                ],
-                                                "layout": {
-                                                    "margin": dict(l=0, r=0, t=4, b=4, pad=0),
-                                                    "xaxis": dict(
-                                                        showline=False,
-                                                        showgrid=False,
-                                                        zeroline=False,
-                                                        showticklabels=False,
-                                                    ),
-                                                    "yaxis": dict(
-                                                        showline=False,
-                                                        showgrid=False,
-                                                        zeroline=False,
-                                                        showticklabels=False,
-                                                    ),
-                                                    "autosize": True,
-                                                    "height": 50,  # px
-                                                    "paper_bgcolor": "rgba(0,0,0,0)",
-                                                    "plot_bgcolor": "rgba(0,0,0,0)",
-                                                    "showlegend": False,
-                                                },
-                                            }
-                                        ),
-                                    ), width=11, className='sparkline'),
-                            ], className='h-100'), width=9, className='sparkline'),
-                    ],
-                        className="flex-grow-1"),
-                    className='d-flex align-items-end')
-            ], color="dark", inverse=True, className='h-100')],
-            className="col-sm-12 col-md-12 col-lg-3 mb-3 pr-md-2"
+            className="col-sm-12 col-md-12 col-lg-4 mb-3 pr-md-2"
         ),
         html.Div([
             dbc.Card([
@@ -426,7 +290,7 @@ def top_cards(df_all, df_hourly_resample):
                     ]
                 ),
             ], color="dark", className="h-100", inverse=True)],
-            className="col-sm-12 col-md-12 col-lg-3 mb-3 pr-md-2"
+            className="col-sm-12 col-md-12 col-lg-4 mb-3 pr-md-2"
         ),
         html.Div([
             dbc.Card([
@@ -464,7 +328,13 @@ def top_cards(df_all, df_hourly_resample):
                                 backgroundColor="#343a40"
                             ), width=3
                         ),
-                        dbc.Col(
+                        dbc.Col(dcc.Loading(
+                                    id='loading_r30_sparkline',
+                                    type="circle",
+                                    className='h-100',
+                                    parent_className="loading_wrapper h-100",
+                                    loading_state={'is_loading': True},
+                                    children=[
                             dcc.Graph(
                                 className="sparkline_graph",
                                 id="r30sparkline",
@@ -477,7 +347,8 @@ def top_cards(df_all, df_hourly_resample):
                                     "displayModeBar": False,
                                 },
                                 figure=go.Figure(),
-                            ), width=9, className='sparkline'
+                            )]
+                        ), width=9, className='sparkline'
                         )
                     ], className="h-100"),
                     html.Div(
@@ -490,9 +361,349 @@ def top_cards(df_all, df_hourly_resample):
                     ]
                 )
             ], color="dark", inverse=True, className='h-100')],
-            className="col-sm-12 col-md-12 col-lg-3 mb-3 pr-md-2"
+            className="col-sm-12 col-md-12 col-lg-4 mb-3 pr-md-2"
         )
     ],
         className='top-cards no-gutters'
     )
     return top_row
+
+
+def second_cards(df_all, df_hourly_resample):
+    row_two = dbc.Row([
+        # DIV FOR CARD 1
+        html.Div([
+            dbc.Card([
+                dbc.CardHeader(
+                    children=[
+                        # ROW FOR HEADERR
+                        dbc.Row([
+                            # HEADER ROW, COL 1 FOR TEXT
+                            dbc.Col("Abay Forecast:",className="col-auto"),
+                            # HEADER ROW, COL 2 FOR LED
+                            dbc.Col(children=[
+                                        daq.LEDDisplay(
+                                        size=20,
+                                        value=round(df_all["Afterbay_Elevation"].iloc[-1], 1),
+                                        color="#FF5E5E",
+                                        backgroundColor="#343a40"
+                                        ),
+                                    ], width=3),
+                            # HEADER ROW, COL 3 FOR SWITCH
+                            dbc.Col(
+                                html.Label(
+                                id="abay_fcst_switch",
+                                n_clicks=0,
+                                style={'float': 'right', 'margin-bottom': '0'},
+                                children=[
+                                    dcc.Input(
+                                        type="checkbox",
+                                        id="abay_toggle",
+                                        className="c-switch-input",
+                                        value="",
+                                    ),
+                                    html.Span(
+                                        className="c-switch-slider",
+                                        id="abay_switch_span",
+                                        n_clicks=0,
+                                        **{'data-checked': "on",
+                                           'data-unchecked': "off"},
+                                    ),
+                                ],
+                                className="c-switch c-switch-label c-switch-success c-switch-sm mr-auto",
+                            ), className="mr-auto"), # END SWITCH
+                        ]),  # END ROW
+                    ]
+                ),
+                dbc.CardBody(
+                            # Row Classname of "h-100" is critical here, since the plots will only take up space that's
+                            # taken. But plotly plots are very stupid, for this to really work nicely, it's best to
+                            # explicitly say the height of the object. If you don't, the first item that draws will take
+                            # up the space in the column (so in this case, there are two graphs and the second one gets,
+                            # squished just enough to make it noticable.
+                            dbc.Row([
+                                dbc.Col(
+                                    dcc.Graph(
+                                        className="sparkline_graph h-100",
+                                        config={
+                                            "staticPlot": False,
+                                            "editable": False,
+                                            "displayModeBar": False,
+                                        },
+                                        figure=go.Figure(
+                                            {
+                                                "data": [
+                                                    {
+                                                        "x": df_hourly_resample.index[-24:],
+                                                        "y": df_hourly_resample['Afterbay_Elevation'][-24:],
+                                                        "mode": "lines",
+                                                        "name": "Obserrved",
+                                                        "line": {"color": "#f4d44d"},
+                                                        "hovertemplate": "%{x|%b-%d <br> %I:%M %p} <br> %{y:.1f}<extra></extra>",
+                                                    }
+                                                ],
+                                                "layout": {
+                                                    "margin": dict(l=0, r=0, t=4, b=4, pad=0),
+                                                    "xaxis": dict(
+                                                        showline=True,      # border
+                                                        mirror=True,        # makes a box border
+                                                        linecolor='gray',  # color of border
+                                                        showgrid=False,
+                                                        zeroline=True,
+                                                        showticklabels=False,
+                                                        gridcolor='black',
+                                                    ),
+                                                    "yaxis": dict(
+                                                        showline=True,          # border
+                                                        mirror=True,            # makes a box border
+                                                        linecolor='gray',      # color of border
+                                                        showgrid=True,
+                                                        zeroline=True,
+                                                        showticklabels=True,
+                                                        gridcolor='black',
+                                                        range=[1168, df_all["Afterbay_Elevation_Setpoint"].values.max()]
+                                                    ),
+                                                    "autosize": True,
+                                                    "height": 120,  # px
+                                                    "paper_bgcolor": "rgba(0,0,0,0)",
+                                                    "plot_bgcolor": "rgba(0,0,0,0)",
+                                                    "font_color": "white",
+                                                },
+                                            }
+                                        ),
+                                    ), width=11, className='sparkline'),
+                            ]), className='align-items-end mt-2')
+            ], color="dark", inverse=True, className='h-100')],
+            className="col-sm-12 col-md-12 col-lg-4 mb-4 pr-md-2"
+        ),
+        # DIV FOR CARD 2
+        html.Div([
+            dbc.Card([
+                dbc.CardHeader(
+                    children=[
+                        # ROW FOR HEADERR
+                        dbc.Row([
+                            # HEADER ROW, COL 1 FOR TEXT
+                            dbc.Col("Oxbow:", className="col-auto"),
+                            # HEADER ROW, COL 2 FOR LED
+                            dbc.Col(children=[
+                                daq.LEDDisplay(
+                                    size=20,
+                                    value=round(df_all["Oxbow_Power"].iloc[-1], 1),
+                                    color="#FF5E5E",
+                                    backgroundColor="#343a40"
+                                ),
+                            ], width=3),
+                            # HEADER ROW, COL 3 FOR SWITCH
+                            dbc.Col(
+                                html.Label(
+                                    id="ox_fcst_switch",
+                                    n_clicks=0,
+                                    style={'float': 'right', 'margin-bottom': '0'},
+                                    children=[
+                                        dcc.Input(
+                                            type="checkbox",
+                                            id="oxbow_toggle",
+                                            className="c-switch-input",
+                                            value="",
+                                        ),
+                                        html.Span(
+                                            className="c-switch-slider",
+                                            id="ox_switch_span",
+                                            n_clicks=0,
+                                            **{'data-checked': "on",
+                                               'data-unchecked': "off"},
+                                        ),
+                                    ],
+                                    className="c-switch c-switch-label c-switch-success c-switch-sm mr-auto",
+                                ), className="mr-auto"),  # END SWITCH
+                        ]),  # END ROW
+                    ]
+                ),
+                dbc.CardBody(
+                    # Row Classname of "h-100" is critical here, since the plots will only take up space that's
+                    # taken. But plotly plots are very stupid, for this to really work nicely, it's best to
+                    # explicitly say the height of the object. If you don't, the first item that draws will take
+                    # up the space in the column (so in this case, there are two graphs and the second one gets,
+                    # squished just enough to make it noticable.
+                    dbc.Row([
+                        dbc.Col(
+                            dcc.Graph(
+                                className="sparkline_graph h-100",
+                                id="oxbow_sparkline",
+                                config={
+                                    "staticPlot": False,
+                                    "editable": False,
+                                    "displayModeBar": False,
+                                },
+                                figure=go.Figure(
+                                    {
+                                        "data": [
+                                            {
+                                                "x": df_all["Timestamp"],
+                                                "y": df_all["Oxbow_Power"],
+                                                "mode": "lines",
+                                                "name": "MFPH",
+                                                "line": {"color": "#f4d44d"},
+                                                "hovertemplate": "%{x|%b-%d <br> %I:%M %p} <br> %{y:.1f}<extra></extra>",
+                                            }
+                                        ],
+                                        "layout": {
+                                            "margin": dict(l=0, r=0, t=4, b=4, pad=0),
+                                            "xaxis": dict(
+                                                showline=True,  # border
+                                                mirror=True,  # makes a box border
+                                                linecolor='gray',  # color of border
+                                                showgrid=False,
+                                                zeroline=True,
+                                                showticklabels=False,
+                                                gridcolor='black',
+                                            ),
+                                            "yaxis": dict(
+                                                showline=True,  # border
+                                                mirror=True,  # makes a box border
+                                                linecolor='gray',  # color of border
+                                                showgrid=True,
+                                                zeroline=True,
+                                                showticklabels=True,
+                                                gridcolor='black',
+                                            ),
+                                            "autosize": True,
+                                            "height": 120,  # px
+                                            "paper_bgcolor": "rgba(0,0,0,0)",
+                                            "plot_bgcolor": "rgba(0,0,0,0)",
+                                            "font_color": "white",
+                                        },
+                                    }
+                                ),
+                            ), width=11, className='sparkline'),
+                    ]), className='align-items-end mt-2')
+            ], color="dark", inverse=True, className='h-100')],
+            className="col-sm-12 col-md-12 col-lg-4 mb-4 pr-md-2"
+        ),
+        # DIV FOR CARD 3
+        html.Div([
+            dbc.Card([
+                dbc.CardHeader(
+                    children=[
+                        # ROW FOR HEADERR
+                        dbc.Row([
+                            # HEADER ROW, COL 1 FOR TEXT
+                            dbc.Col("MFPH:", className="col-auto"),
+                            # HEADER ROW, COL 2 FOR LED
+                            dbc.Col(children=[
+                                daq.LEDDisplay(
+                                    size=20,
+                                    value=round(df_all["GEN_MDFK_and_RA"].iloc[-1], 1),
+                                    color="#FF5E5E",
+                                    backgroundColor="#343a40"
+                                ),
+                            ], width=3),
+                            # HEADER ROW, COL 3 FOR SWITCH
+                            dbc.Col(
+                                html.Label(
+                                    id="mfph_fcst_switch",
+                                    n_clicks=0,
+                                    style={'float': 'right', 'margin-bottom': '0'},
+                                    children=[
+                                        dcc.Input(
+                                            type="checkbox",
+                                            id="mfph_toggle",
+                                            className="c-switch-input",
+                                            value="",
+                                        ),
+                                        html.Span(
+                                            className="c-switch-slider",
+                                            id="mfph_switch_span",
+                                            n_clicks=0,
+                                            **{'data-checked': "on",
+                                               'data-unchecked': "off"},
+                                        ),
+                                    ],
+                                    className="c-switch c-switch-label c-switch-success c-switch-sm mr-auto",
+                                ), className="mr-auto"),  # END SWITCH
+                        ]),  # END ROW
+                    ]
+                ),
+                dbc.CardBody(
+                    # Row Classname of "h-100" is critical here, since the plots will only take up space that's
+                    # taken. But plotly plots are very stupid, for this to really work nicely, it's best to
+                    # explicitly say the height of the object. If you don't, the first item that draws will take
+                    # up the space in the column (so in this case, there are two graphs and the second one gets,
+                    # squished just enough to make it noticable.
+                    dbc.Row([
+                        # Even though this is an html.Div, it's acting as a row. Program will crash if this is
+                        # a dbc.Row instead of div
+                        html.Div(id="PminPmaxRow", className='row',
+                                    children=[
+                                        # All columns are auto-sized.
+                                        # Column 1 - autosize no margin on left hand side.
+                                        html.Div(f" Pmin: ", className="col-auto ml-0 text-size-1"),
+                                        # Column 2 (Pmin value)
+                                        html.Div(round(df_all["Pmin"].iloc[-1], 1),
+                                            className='col-auto badge badge-success text-size-1 text-monospace ml-0'),
+                                        # Column 3 (Pmax text)
+                                        html.Div(f" Pmax: ", className="col-auto ml-2 text-size-1"),
+                                        # Col 4 (Pmax value)
+                                        html.Div(round(df_all["Pmax"].iloc[-1], 1),
+                                            className='col-auto badge badge-success text-size-1 text-monospace ml-0'),
+                                    ]
+                                 ),
+                        html.Div(className="w-100"),
+                        dbc.Col(
+                            dcc.Graph(
+                                className="sparkline_graph h-100",
+                                config={
+                                    "staticPlot": False,
+                                    "editable": False,
+                                    "displayModeBar": False,
+                                },
+                                figure=go.Figure(
+                                    {
+                                        "data": [
+                                            {
+                                                "x": df_all["Timestamp"],
+                                                "y": df_all["GEN_MDFK_and_RA"],
+                                                "mode": "lines",
+                                                "name": "MFPH",
+                                                "line": {"color": "#f4d44d"},
+                                                "hovertemplate": "%{x|%b-%d <br> %I:%M %p} <br> %{y:.1f}<extra></extra>",
+                                            }
+                                        ],
+                                        "layout": {
+                                            "margin": dict(l=0, r=0, t=4, b=4, pad=0),
+                                            "xaxis": dict(
+                                                showline=True,  # border
+                                                mirror=True,  # makes a box border
+                                                linecolor='gray',  # color of border
+                                                showgrid=False,
+                                                zeroline=True,
+                                                showticklabels=False,
+                                                gridcolor='black',
+                                            ),
+                                            "yaxis": dict(
+                                                showline=True,  # border
+                                                mirror=True,  # makes a box border
+                                                linecolor='gray',  # color of border
+                                                showgrid=True,
+                                                zeroline=True,
+                                                showticklabels=True,
+                                                gridcolor='black',
+                                            ),
+                                            "autosize": True,
+                                            "height": 120,  # px
+                                            "paper_bgcolor": "rgba(0,0,0,0)",
+                                            "plot_bgcolor": "rgba(0,0,0,0)",
+                                            "font_color": "white",
+                                        },
+                                    }
+                                ),
+                            ), width=11, className='sparkline'),
+                    ], className='justify-content-center'), className='align-items-end')
+            ], color="dark", inverse=True, className='h-100')],
+            className="col-sm-12 col-md-12 col-lg-4 mb-4 pr-md-2"
+        ),
+    ],
+        className='top-cards no-gutters'
+    )
+    return row_two

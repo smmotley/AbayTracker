@@ -1472,6 +1472,10 @@ body {
   font-size: 1.1rem !important;
 }
 
+.text-size-1 {
+  font-size: 0.9rem !important;
+}
+
 /* This is for the label below the gauge */
 .jjZFEi{
     top: 50px !important;
