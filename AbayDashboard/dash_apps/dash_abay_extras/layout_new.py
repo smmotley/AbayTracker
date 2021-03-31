@@ -425,6 +425,7 @@ def second_cards(df_all, df_hourly_resample):
                                 dbc.Col(
                                     dcc.Graph(
                                         className="sparkline_graph h-100",
+                                        id="abay_sparkline",
                                         config={
                                             "staticPlot": False,
                                             "editable": False,
@@ -468,6 +469,7 @@ def second_cards(df_all, df_hourly_resample):
                                                     "paper_bgcolor": "rgba(0,0,0,0)",
                                                     "plot_bgcolor": "rgba(0,0,0,0)",
                                                     "font_color": "white",
+                                                    "showlegend": False,
                                                 },
                                             }
                                         ),
@@ -567,7 +569,9 @@ def second_cards(df_all, df_hourly_resample):
                                                 zeroline=True,
                                                 showticklabels=True,
                                                 gridcolor='black',
+                                                range=[0, 6]
                                             ),
+                                            "showlegend": False,
                                             "autosize": True,
                                             "height": 120,  # px
                                             "paper_bgcolor": "rgba(0,0,0,0)",
@@ -680,6 +684,7 @@ def second_cards(df_all, df_hourly_resample):
                                                 zeroline=True,
                                                 showticklabels=False,
                                                 gridcolor='black',
+                                                range=[0, 220]
                                             ),
                                             "yaxis": dict(
                                                 showline=True,  # border

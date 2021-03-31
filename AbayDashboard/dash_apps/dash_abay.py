@@ -7,7 +7,7 @@ import pandas as pd
 from zipfile import ZipFile
 import copy
 import requests
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from datetime import datetime, timedelta, time, timezone
 import pytz
 import numpy as np
@@ -141,6 +141,7 @@ def main(meters):
     df_all, df_cnrfc = update_data(meters, None)
 
     # This is for the abay levels. We're just going to show the data on an hourly basis.
+    #
     df_hourly_resample = df_all.resample('60min', on='Timestamp').mean()
 
     # Since the data contain CNRFC data, which contains forecast data, remove all the nan values
@@ -465,23 +466,61 @@ def main(meters):
         Output('oxbow_sparkline', 'figure'),
         [Input("oxbow_sparkline", "figure"),
          Input("dummy-dataframe","children"),
+         Input("dummy-rfc-dataframe", "children"),
         Input("ox_switch_span", "n_clicks")]
     )
-    def add_oxbow_forecast(figure, json_data, n_clicks):
+    def add_oxbow_forecast(figure, json_data, rfc_json_data, n_clicks):
         ctx = dash.callback_context
 
         # The ID triggering the callback
         toggle_id = ctx.triggered[0]['prop_id'].split('.')[0]
         df_full = pd.read_json(json_data, orient='index')
-        df_full.Timestamp = df_full['Timestamp'].dt.tz_convert('US/Pacific')
+        df_cnrfc = pd.read_json(rfc_json_data, orient='index')
 
+        df_full.Timestamp = df_full['Timestamp'].dt.tz_convert('US/Pacific')
+        df_cnrfc.GMT = pd.to_datetime(df_cnrfc.GMT).dt.tz_convert('US/Pacific')
+        #test = df_cnrfc[df_cnrfc["Oxbow_fcst"].notnull()]
         # Initial Load, don't show forecast
         if toggle_id == 'dummy-dataframe' and len(figure['data'])<2:
             figure['data'].append(
-                dict(x=df_full["Timestamp"], y=df_full["Oxbow_Forecast"],
+                dict(x=df_cnrfc["GMT"][df_cnrfc["Oxbow_fcst"].notnull()],
+                     y=df_cnrfc["Oxbow_fcst"][df_cnrfc["Oxbow_fcst"].notnull()],
                               mode='lines',
                               visible=False,
                               hovertemplate="%{x|%b-%d <br> %I:%M %p} <br> %{y}<extra></extra>", ))
+        if n_clicks % 2 and len(figure['data']) > 0:
+            figure['data'][1]['visible'] = True
+        else:
+            figure['data'][1]['visible'] = False
+
+        return figure
+
+    @app.callback(
+        Output('abay_sparkline', 'figure'),
+        [Input("abay_sparkline", "figure"),
+         Input("dummy-dataframe", "children"),
+         Input("dummy-rfc-dataframe", "children"),
+         Input("abay_switch_span", "n_clicks")]
+    )
+    def add_abay_forecast(figure, json_data, rfc_json_data, n_clicks):
+        ctx = dash.callback_context
+
+        # The ID triggering the callback
+        toggle_id = ctx.triggered[0]['prop_id'].split('.')[0]
+        df_full = pd.read_json(json_data, orient='index')
+        df_cnrfc = pd.read_json(rfc_json_data, orient='index')
+
+        df_full.Timestamp = df_full['Timestamp'].dt.tz_convert('US/Pacific')
+        df_cnrfc.GMT = pd.to_datetime(df_cnrfc.GMT).dt.tz_convert('US/Pacific')
+        # test = df_cnrfc[df_cnrfc["Oxbow_fcst"].notnull()]
+        # Initial Load, don't show forecast
+        if toggle_id == 'dummy-dataframe' and len(figure['data']) < 2:
+            figure['data'].append(
+                dict(x=df_cnrfc["GMT"][df_cnrfc["Abay_Elev_Fcst"].notnull()],
+                     y=df_cnrfc["Abay_Elev_Fcst"][df_cnrfc["Abay_Elev_Fcst"].notnull()],
+                     mode='lines',
+                     visible=False,
+                     hovertemplate="%{x|%b-%d <br> %I:%M %p} <br> %{y}<extra></extra>", ))
         if n_clicks % 2 and len(figure['data']) > 0:
             figure['data'][1]['visible'] = True
         else:
@@ -741,7 +780,7 @@ def update_data(meters, rfc_json_data):
             df_meter.index.names = ['index']
 
             # Remove any outliers or data spikes
-            df_meter = drop_numerical_outliers(df_meter, meter, z_thresh=3)
+            # df_meter = drop_numerical_outliers(df_meter, meter, z_thresh=3)
 
             # Rename the column (this was needed if we wanted to merge all the Value columns into a dataframe)
             renamed_col = (f"{meter.meter_name}_{meter.attribute}").replace(' ', '_')
@@ -797,7 +836,7 @@ def update_data(meters, rfc_json_data):
             try:
                 df_cnrfc_list.append(pd.read_csv(f"https://www.cnrfc.noaa.gov/csv/{file}_american_csv_export.zip"))
                 most_recent_file = file  # The date last file successfully pulled.
-            except HTTPError as error:
+            except (HTTPError, URLError) as error:
                 logging.warning(f'CNRFC HTTP Request failed {error} for {file}. Error code: {error}')
                 print(f'CNRFC HTTP Request failed {error} for {file}')
 
@@ -827,51 +866,12 @@ def update_data(meters, rfc_json_data):
     # Dataframe already exists in html
     else:
         df_cnrfc = pd.read_json(rfc_json_data, orient='index')
+        df_cnrfc.GMT = pd.to_datetime(df_cnrfc.GMT).dt.tz_convert('US/Pacific')
     ######################## END CNRFC ###########################################
 
-    # Add in the remainder of any forecast data to the cnrfc dataframe
-    try:
-        # Download the data for the Oxbow and MFPH Forecast
-        pi_data_ox = PiRequest("OPS", "Oxbow", "Forecasted Generation")
-        # pi_data_gen = PiRequest("Energy_Marketing", None, "MFRA_Forecast", True)
-        df_fcst = pd.DataFrame.from_dict(pi_data_ox.data)
-        # This will need to be changed to the following:
-        #df_fcst["MFRA_fcst"] = pd.DataFrame.from_dict(pi_data_gen.data)['Value']
-        df_fcst["MFRA_fcst"] = pd.DataFrame.from_dict(pi_data_ox.data)['Value']
-
-        # Convert the Timestamp to a pandas datetime object and convert to Pacific time.
-        df_fcst.Timestamp = pd.to_datetime(df_fcst.Timestamp).dt.tz_convert('US/Pacific')
-        df_fcst.index = df_fcst.Timestamp
-        df_fcst.index.names = ['index']
-
-        df_fcst.rename(columns={"Value": "Oxbow_fcst"}, inplace=True)
-
-        # Resample the forecast to hourly to match CNRFC time. If this is not done, the following merge will fail.
-        df_fcst = df_fcst.resample('60min', on='Timestamp').mean()
-
-        # Merge the forecast to the CNRFC using the GMT column for the cnrfc and the index for the oxbow fcst data.
-        df_cnrfc = pd.merge(df_cnrfc, df_fcst[["Oxbow_fcst","MFRA_fcst"]],
-                            left_on="GMT", right_index=True, how='outer')
-
-        # Calculate the Pmin and Pmax in the same manner as with the historical data.
-        df_cnrfc["Pmin1"] = const_a * (df_cnrfc["R4_fcst"] - 26)
-        df_cnrfc["Pmin2"] = (-0.14 * (df_cnrfc["R4_fcst"] - 26) *
-                           ((df_all["Hell_Hole_Elevation"].iloc[-1] - 2536) / (4536 - 2536)))
-
-        df_cnrfc["Pmin"] = df_cnrfc[["Pmin1", "Pmin2"]].max(axis=1)
-
-        df_cnrfc["Pmax1"] = ((const_a + const_b) / const_b) * (124 + (const_a * df_cnrfc["R4_fcst"] - df_all["R5_Flow"].iloc[-1]))
-        df_cnrfc["Pmax2"] = ((const_a + const_b) / const_a) * (86 - (const_b * df_cnrfc["R4_fcst"] - df_all["R5_Flow"].iloc[-1]))
-
-        df_cnrfc["Pmax"] = df_cnrfc[["Pmax1", "Pmax2"]].min(axis=1)
-
-        # Drop unnesessary columns.
-        df_cnrfc.drop(["Pmin1", "Pmin2", "Pmax1", "Pmax2"], axis=1, inplace=True)
+    # Add in the remainder of any forecast data (e.g. Oxbow Forecast, Abay Fcst) to the cnrfc dataframe
+    if 'Oxbow_fcst' not in df_cnrfc:
         df_cnrfc = abay_forecast(df_cnrfc, df_all)
-    except Exception as e:
-        print(f"Could Not Find Metered Forecast Data (e.g. Oxbow Forecast): {e}")
-        df_cnrfc["Oxbow_fcst"] = np.nan
-        logging.warning(f"Could Not Find Metered Forecast Data (e.g. Oxbow Forecast). Error Message: {e}")
     return df_all, df_cnrfc
 
 
@@ -904,6 +904,67 @@ def drop_numerical_outliers(df, meter, z_thresh):
 
 
 def abay_forecast(df, df_pi):
+    # PMIN / PMAX Calculations
+    const_a = 0.09  # Default is 0.0855.
+    const_b = 0.135422  # Default is 0.138639
+
+    ########## GET OXBOW GENERRATION FORECAST DATA ###################
+    try:
+        # Download the data for the Oxbow and MFPH Forecast (data start_time is -24 hours from now, end time is +72 hrs)
+        pi_data_ox = PiRequest("OPS", "Oxbow", "Forecasted Generation", True)
+        # pi_data_gen = PiRequest("Energy_Marketing", None, "MFRA_Forecast", True)
+
+        df_fcst = pd.DataFrame.from_dict(pi_data_ox.data)
+
+        # This will need to be changed to the following:
+        # df_fcst["MFRA_fcst"] = pd.DataFrame.from_dict(pi_data_gen.data)['Value']
+
+        df_fcst["MFRA_fcst"] = pd.DataFrame.from_dict(pi_data_ox.data)['Value']
+
+        # For whatever reason, the data are of type "object", need to convert to float.
+        df_fcst["MFRA_fcst"] = pd.to_numeric(df_fcst.MFRA_fcst, errors='coerce')
+
+        # Convert the Timestamp to a pandas datetime object and convert to Pacific time.
+        df_fcst.Timestamp = pd.to_datetime(df_fcst.Timestamp).dt.tz_convert('US/Pacific')
+        df_fcst.index = df_fcst.Timestamp
+        df_fcst.index.names = ['index']
+
+        # For whatever reason, the data are of type "object", need to convert to float.
+        df_fcst["Value"] = pd.to_numeric(df_fcst.Value, errors='coerce')
+
+        df_fcst.rename(columns={"Value": "Oxbow_fcst"}, inplace=True)
+
+        # These columns can't be resampled to hourly (they contain strings), so remove them.
+        df_fcst.drop(["Good", "Questionable", "Substituted", "UnitsAbbreviation"], axis=1, inplace=True)
+
+        # Resample the forecast to hourly to match CNRFC time. If this is not done, the following merge will fail.
+        # The label = right tells this that we want to use the last time in the mean as the label (i.e. hour ending)
+        df_fcst = df_fcst.resample('60min', label='right').mean()
+
+        # Merge the forecast to the CNRFC using the GMT column for the cnrfc and the index for the oxbow fcst data.
+        df = pd.merge(df, df_fcst[["Oxbow_fcst", "MFRA_fcst"]], left_on="GMT", right_index=True, how='outer')
+
+        # Calculate the Pmin and Pmax in the same manner as with the historical data.
+        df["Pmin1"] = const_a * (df["R4_fcst"] - 26)
+        df["Pmin2"] = (-0.14 * (df["R4_fcst"] - 26) * ((df_pi["Hell_Hole_Elevation"].iloc[-1] - 2536) / (4536 - 2536)))
+
+        df["Pmin"] = df[["Pmin1", "Pmin2"]].max(axis=1)
+
+        df["Pmax1"] = ((const_a + const_b) / const_b) * (
+                    124 + (const_a * df["R4_fcst"] - df_pi["R5_Flow"].iloc[-1]))
+        df["Pmax2"] = ((const_a + const_b) / const_a) * (
+                    86 - (const_b * df["R4_fcst"] - df_pi["R5_Flow"].iloc[-1]))
+
+        df["Pmax"] = df[["Pmax1", "Pmax2"]].min(axis=1)
+
+        # Drop unnesessary columns.
+        df.drop(["Pmin1", "Pmin2", "Pmax1", "Pmax2"], axis=1, inplace=True)
+    except Exception as e:
+        print(f"Could Not Find Metered Forecast Data (e.g. Oxbow Forecast): {e}")
+        df["Oxbow_fcst"] = np.nan
+        logging.warning(f"Could Not Find Metered Forecast Data (e.g. Oxbow Forecast). Error Message: {e}")
+    ################### END OXBOW FORECAST ##############################
+
     # Default ratio of the contribution of total power that is going to Ralston.
     RAtoMF_ratio = 0.41
 
@@ -915,23 +976,49 @@ def abay_forecast(df, df_pi):
     # The last reading in the df for the float set point
     float = df_pi["Afterbay_Elevation_Setpoint"].iloc[-1]
 
-    # The first timestamp we have for the forecast. This is probably not needed and can be deleted
-    # first_fcst_timestamp = df["GMT"].loc[df['Oxbow_fcst'].first_valid_index()]
-
     #df_pi.set_index('Timestamp', inplace=True)
     #abay_inital = df_pi["Afterbay_Elevation"].truncate(before=(datetime.now(timezone.utc)-timedelta(hours=24)))
 
     # The PI data we retrieve goes back 24 hours. The initial elevation will give us a chance to test the expected
     # abay elevation vs the actual abay elevation. The abay_initial is our starting point.
-    abay_inital_elev = df_pi["Afterbay_Elevation"].iloc[0]
+    # Note: For resampled data over an hour, the label used for the timestamp is the first time stamp, but since
+    #       we want hour ending, we want the last time to be used at the label (label = right).
+    df_pi_hourly = df_pi.resample('60min', on='Timestamp', label='right').mean()
 
-    # y = 0.6334393x^2 - 1409.2226x + 783,749
+    # Get any observed values that have already occurred from the PI data.
+    df_pi_hourly["RA_MW"] = np.minimum(86, df_pi_hourly["GEN_MDFK_and_RA"] * RAtoMF_ratio)
+    df_pi_hourly["MF_MW"] = np.minimum(128, df_pi_hourly["GEN_MDFK_and_RA"] - df_pi_hourly['RA_MW'])
+
+    # Elevation observed at the beginning of our dataset (24 hours ago). This serves as the starting
+    # point for our forecast, so that we can see if it's trued up as we go forward in time.
+    abay_inital_elev = df_pi_hourly["Afterbay_Elevation"].iloc[0]
+
+    # Convert elevation to AF ==> y = 0.6334393x^2 - 1409.2226x + 783749
     abay_inital_af = (0.6334393*(abay_inital_elev**2))-1409.2226*abay_inital_elev+783749
 
-    df["Oxbow_Outflow"] = (df["Oxbow_fcst"] * 163.73) + 83.956
-
+    # Ralston's Max output is 86 MW; so we want smaller of the two.
     df["RA_MW"] = np.minimum(86, df["MFRA_fcst"] * RAtoMF_ratio)
     df["MF_MW"] = np.minimum(128, df["MFRA_fcst"]-df['RA_MW'])
+
+    # This is so we can do the merge below (we need both df's to have the same column name). The goal is to overwrite
+    # any "forecast" data for Oxbow with observed values. There is no point in keeping forecast values in.
+    df_pi_hourly.rename(columns={"Oxbow_Power": "Oxbow_fcst"}, inplace=True)
+
+    # This is a way to "update" the generation data with any observed data. First merge in any historical data.
+    df = pd.merge(df, df_pi_hourly[["RA_MW", "MF_MW", "Oxbow_fcst"]],
+                  left_on="GMT", right_index=True, how='left')
+
+    # Next, since we already have an RA_MF column, the merge will make a _x and _y. Just fill the original with
+    # the new data (and any bad data will be nan) and store all that data as RA_MW.
+    df["RA_MW"] = df['RA_MW_y'].fillna(df['RA_MW_x'])
+    df["MF_MW"] = df['MF_MW_y'].fillna(df['MF_MW_x'])
+    df["Oxbow_fcst"] = df['Oxbow_fcst_y'].fillna(df['Oxbow_fcst_x'])
+
+    # We don't need the _y and _x, so drop them.
+    df.drop(['RA_MW_y', 'RA_MW_x', 'MF_MW_y', 'MF_MW_x', 'Oxbow_fcst_x','Oxbow_fcst_y'], axis=1, inplace=True)
+
+    # Conversion from MW to cfs ==> CFS @ Oxbow = MW * 163.73 + 83.956
+    df["Oxbow_Outflow"] = (df["Oxbow_fcst"] * 163.73) + 83.956
 
     # R5 Valve never changes (at least not in the last 5 years in PI data)
     df["R5_Valve"] = 28
@@ -941,14 +1028,15 @@ def abay_forecast(df, df_pi):
         #df["RA_MW"] = max(df["RA_MW"], min(86,((df["R4_fcst"]-df["R5_Valve"])/10)*RAtoMF_ratio))
         df["RA_MW"] = np.maximum(df["RA_MW"], df["Pmin"] * RAtoMF_ratio)
 
-    # Polynomial best fits for conversions
+    # Polynomial best fits for conversions.
     df["RA_Inflow"] = (0.005*(df["RA_MW"]**3))-(0.0423*(df["RA_MW"]**2))+(10.266*df["RA_MW"]) + 2.1879
     df["MF_Inflow"] = (0.0049 * (df["MF_MW"] ** 2)) + (6.2631 * df["MF_MW"]) + 18.4
 
-    # The linear MW to CFS relationship above doesn't apply if Oxbow is 0 MW. In that case it's 0 (otherwise the
+    # The linear MW to CFS relationship above doesn't apply if Generation is 0 MW. In that case it's 0 (otherwise the
     # value would be 83.956 due to the y=mx+b above where y = b when x is zero, we need y to = 0 too).
     df.loc[df['MF_MW'] == 0, 'RA_Inflow'] = 0
     df.loc[df['RA_MW'] == 0, 'MF_Inflow'] = 0
+    df.loc[df['Oxbow_fcst'] == 0, 'Oxbow_Outflow'] = 0
 
     # It helps to look at the PI Vision screen for this.
     # Ibay In: 1) Inflow from MFPH (the water that's powering MFPH)
@@ -960,7 +1048,7 @@ def abay_forecast(df, df_pi):
     #                                |   |
     #                                |   |
     #                                |   |
-    #                          _____MF INFLOW____
+    #                          ___MFPH INFLOW____
     #                          |                |
     #     OUTFLOW (RA INFLOW)  |                |  R4 INFLOW
     #                    ------|            <---|--------
@@ -991,7 +1079,13 @@ def abay_forecast(df, df_pi):
     df["Abay_Outflow"] = df["Oxbow_Outflow"]
 
     df["Abay_AF_Change"] = (df["Abay_Inflow"]-df["Abay_Outflow"])*cfs_to_afh
-    df["Abay_AF_Fcst"] = abay_inital_af + df["Abay_AF_Change"]
+
+    first_valid = df["Abay_AF_Change"].first_valid_index()
+    for i in range(first_valid, len(df)):
+        if i == first_valid:
+            df.loc[i, "Abay_AF_Fcst"] = abay_inital_af
+        else:
+            df.loc[i, "Abay_AF_Fcst"] = df.loc[i-1,"Abay_AF_Fcst"] + df.loc[i, "Abay_AF_Change"]
 
     # y = -1.4663E-6x^2+0.019776718*x+1135.3
     df["Abay_Elev_Fcst"] = np.minimum(float, (-0.0000014663 *
