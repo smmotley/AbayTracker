@@ -991,10 +991,11 @@ def abay_forecast(df, df_pi):
 
     # Elevation observed at the beginning of our dataset (24 hours ago). This serves as the starting
     # point for our forecast, so that we can see if it's trued up as we go forward in time.
-    abay_inital_elev = df_pi_hourly["Afterbay_Elevation"].iloc[0]
-
     # Convert elevation to AF ==> y = 0.6334393x^2 - 1409.2226x + 783749
-    abay_inital_af = (0.6334393*(abay_inital_elev**2))-1409.2226*abay_inital_elev+783749
+    df_pi_hourly["Abay_AF_Observed"] = (0.6334393 * (df_pi_hourly["Afterbay_Elevation"] ** 2)) - 1409.2226 * df_pi_hourly[
+        "Afterbay_Elevation"] + 783749
+    abay_inital_af = df_pi_hourly["Abay_AF_Observed"].iloc[0]
+    df_pi_hourly["Abay_AF_Change_Observed"] = df_pi_hourly["Abay_AF_Observed"].diff()
 
     # Ralston's Max output is 86 MW; so we want smaller of the two.
     df["RA_MW"] = np.minimum(86, df["MFRA_fcst"] * RAtoMF_ratio)
@@ -1005,7 +1006,7 @@ def abay_forecast(df, df_pi):
     df_pi_hourly.rename(columns={"Oxbow_Power": "Oxbow_fcst"}, inplace=True)
 
     # This is a way to "update" the generation data with any observed data. First merge in any historical data.
-    df = pd.merge(df, df_pi_hourly[["RA_MW", "MF_MW", "Oxbow_fcst"]],
+    df = pd.merge(df, df_pi_hourly[["RA_MW", "MF_MW", "Oxbow_fcst", "Abay_AF_Observed", "Abay_AF_Change_Observed"]],
                   left_on="GMT", right_index=True, how='left')
 
     # Next, since we already have an RA_MF column, the merge will make a _x and _y. Just fill the original with
@@ -1029,7 +1030,7 @@ def abay_forecast(df, df_pi):
         df["RA_MW"] = np.maximum(df["RA_MW"], df["Pmin"] * RAtoMF_ratio)
 
     # Polynomial best fits for conversions.
-    df["RA_Inflow"] = (0.005*(df["RA_MW"]**3))-(0.0423*(df["RA_MW"]**2))+(10.266*df["RA_MW"]) + 2.1879
+    df["RA_Inflow"] = (0.0005*(df["RA_MW"]**3))-(0.0423*(df["RA_MW"]**2))+(10.266*df["RA_MW"]) + 2.1879
     df["MF_Inflow"] = (0.0049 * (df["MF_MW"] ** 2)) + (6.2631 * df["MF_MW"]) + 18.4
 
     # The linear MW to CFS relationship above doesn't apply if Generation is 0 MW. In that case it's 0 (otherwise the
@@ -1068,6 +1069,13 @@ def abay_forecast(df, df_pi):
     #        THEREFORE:
     #        Inflow Into Abay = RA_GEN_TO_CFS + R20_RFC_FCST + R4_RFC_fcst + AX(0,(MF_GEN_TO_CFS - RA_GEN_TO_CFS)) + R5
     #
+    #        CALCULATION ERRORS:
+    #        The error between the forecast and the observed is usually fairly consistent on a 24 hour basis (e.g. in
+    #        our abay tracker we have a +Fill -Drain adder that we can apply).
+    #        In order to compensate for errors, we will calculate the Observed change in Acre Feet vs the forecast
+    #        and convert this error to cfs. The average of this error will be added to the forecast to adjust for the
+    #        observed error.
+    #
     # Ibay In - Ibay Out = The spill that will eventually make it into Abay through R20.
     df["Ibay_Spill"] = np.maximum(0,(df["MF_Inflow"] - df["RA_Inflow"])) + df["R5_Valve"] + df['R4_fcst']
 
@@ -1080,13 +1088,25 @@ def abay_forecast(df, df_pi):
 
     df["Abay_AF_Change"] = (df["Abay_Inflow"]-df["Abay_Outflow"])*cfs_to_afh
 
+    # Calculate the error by taking the value of the forecast - the value of the observed
+    df["Abay_AF_Change_Error"] = df["Abay_AF_Change"] - df["Abay_AF_Change_Observed"]
+
+    # Convert the AF error to CFS (this will be in case we want to graph the errors).
+    df["Abay_CFS_Error"] = df["Abay_AF_Change_Error"] * (1/cfs_to_afh)
+
+    # Normally, the errors over a 24 hour period are pretty consistent. So just average the error.
+    cfs_error = df["Abay_CFS_Error"].mean()
+    af_error = df["Abay_AF_Change_Error"].mean()
+
+    # To get the AF elevation forecast, take the initial reading and apply the change. Also add in the error.
     first_valid = df["Abay_AF_Change"].first_valid_index()
     for i in range(first_valid, len(df)):
         if i == first_valid:
             df.loc[i, "Abay_AF_Fcst"] = abay_inital_af
         else:
-            df.loc[i, "Abay_AF_Fcst"] = df.loc[i-1,"Abay_AF_Fcst"] + df.loc[i, "Abay_AF_Change"]
+            df.loc[i, "Abay_AF_Fcst"] = df.loc[i-1,"Abay_AF_Fcst"] + df.loc[i, "Abay_AF_Change"] - af_error
 
+    # Change from AF to Elevation
     # y = -1.4663E-6x^2+0.019776718*x+1135.3
     df["Abay_Elev_Fcst"] = np.minimum(float, (-0.0000014663 *
                                              (df["Abay_AF_Fcst"] ** 2)+0.0197767158*df["Abay_AF_Fcst"]+1135.3))
