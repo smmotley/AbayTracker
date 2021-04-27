@@ -22,6 +22,7 @@ import io
 import re
 import math
 from plotly import graph_objs as go
+from plotly.subplots import make_subplots
 from plotly.colors import n_colors, make_colorscale
 from pandas.api.types import is_datetime64_any_dtype as is_datetime
 from scipy import stats
@@ -214,18 +215,17 @@ def main():
                     dcc.Dropdown(
                         id='abay-dropdown',
                         options=[
-                            {'label': 'Abay Forecast', 'value': 'Abay_Elev_Fcst'},
                             {'label': 'Abay Inflow', 'value': 'Abay_Inflow'},
                             {'label': 'Abay Outflow', 'value': 'Abay_Outflow'},
                             {'label': 'River Flows', 'value': 'River_Flows'},
-                            {'label': 'Pmin/Pmax', 'value': 'Pmin_Pmax'},
-                            {'label': 'Forecast Error', 'value': 'Abay_CFS_Error'},
-                            {'label': 'RA and MF', 'value': 'RAandMF'},
+                            {'label': 'River Flow Error', 'value': 'Abay_CFS_Error'},
                             {'label': 'Total Gen', 'value': 'Total_Gen'},
+                            {'label': 'RA and MF', 'value': 'RAandMF'},
                             {'label': 'Abay AF Change (Obs)', 'value': 'Abay_AF_Change_Observed'},
-                            {'label': 'Abay AF Change', 'value': 'Abay_AF_Change'},
+                            {'label': 'Abay AF Change (Fcst)', 'value': 'Abay_AF_Change'},
+                            {'label': 'Pmin/Pmax', 'value': 'Pmin_Pmax'},
                         ],
-                        value=['Abay_Elev_Fcst','Abay_Inflow'],
+                        value=[],
                         multi=True
                     ),
                     dcc.Graph(id='table_graph',
@@ -302,8 +302,12 @@ def main():
      Input('table_graph', 'figure'),
      Input('dummy_fcst_df','children')])
 def update_output(selections,table, df_json):
+    # Read the df from the dummy id.
     df = pd.read_json(df_json, orient='index')
+
+    # Every time we pull the df in json format, it needs to be converted to the correct time format.
     df.GMT = pd.to_datetime(df.GMT).dt.tz_convert('US/Pacific')
+
     table_contents = {
         "Day":{
             "header": "<b>Day</b>",
@@ -329,56 +333,56 @@ def update_output(selections,table, df_json):
         "MF_MW": {
             "header": "<b>MF MW</b>",
             "df_column": "MF_MW",
-            "df_vals": (df["MF_MW"][df["MF_MW"].notnull()]).round(1),
+            "df_vals": (df["MF_MW"][df["MF_MW"].notnull()]).round(0),
             "color_hi": 124,
             "color_low": 0,
         },
         "RA_MW": {
             "header": "<b>RA MW</b>",
             "df_column": "RA_MW",
-            "df_vals": (df["RA_MW"][df["RA_MW"].notnull()]).round(1),
+            "df_vals": (df["RA_MW"][df["RA_MW"].notnull()]).round(0),
             "color_hi": 86,
             "color_low": 0,
         },
         "Abay_Elev_Fcst": {
             "header": "<b>Abay Fcst</b>",
             "df_column": "Abay_Elev_Fcst",
-            "df_vals": (df["Abay_Elev_Fcst"][df["Oxbow_fcst"].notnull()]).round(1),
+            "df_vals": (df["Abay_Elev_Fcst"][df["Oxbow_fcst"].notnull()]).round(2),
             "color_hi": 1175,
             "color_low": 1168,
         },
         "Abay_Inflow": {
             "header": "<b>Abay Inflow</b>",
             "df_column": "Abay_Inflow",
-            "df_vals": (df["Abay_Inflow"][df["Abay_Inflow"].notnull()]).round(1),
+            "df_vals": (df["Abay_Inflow"][df["Abay_Inflow"].notnull()]).round(0),
             "color_hi": df["Abay_Inflow"].max(),
             "color_low": df["Abay_Inflow"].min(),
         },
         "Abay_Outflow": {
             "header": "<b>Abay Outflow</b>",
             "df_column": "Abay_Outflow",
-            "df_vals": (df["Abay_Outflow"][df["Abay_Outflow"].notnull()]).round(1),
+            "df_vals": (df["Abay_Outflow"][df["Abay_Outflow"].notnull()]).round(0),
             "color_hi": df["Abay_Outflow"].max(),
             "color_low": df["Abay_Outflow"].min(),
         },
         "R4_fcst": {
             "header": "<b>R4</b>",
             "df_column": "R4_fcst",
-            "df_vals": (df["R4_fcst"][df["Oxbow_fcst"].notnull()]).round(1),
+            "df_vals": (df["R4_fcst"][df["Oxbow_fcst"].notnull()]).round(0),
             "color_hi": (df["R4_fcst"][df["Oxbow_fcst"].notnull()]).max(),
             "color_low": (df["R4_fcst"][df["Oxbow_fcst"].notnull()]).min(),
         },
         "R20_fcst_adjusted": {
             "header": "<b>R20</b>",
             "df_column": "R20_fcst_adjusted",
-            "df_vals": (df["R20_fcst_adjusted"][df["Oxbow_fcst"].notnull()]).round(1),
+            "df_vals": (df["R20_fcst_adjusted"][df["Oxbow_fcst"].notnull()]).round(0),
             "color_hi": (df["R20_fcst_adjusted"][df["Oxbow_fcst"].notnull()]).max(),
             "color_low": (df["R20_fcst_adjusted"][df["Oxbow_fcst"].notnull()]).min(),
         },
         "R30_fcst": {
             "header": "<b>R30</b>",
             "df_column": "R30_fcst",
-            "df_vals": (df["R30_fcst"][df["Oxbow_fcst"].notnull()]).round(1),
+            "df_vals": (df["R30_fcst"][df["Oxbow_fcst"].notnull()]).round(0),
             "color_hi": (df["R30_fcst"][df["Oxbow_fcst"].notnull()]).max(),
             "color_low": (df["R30_fcst"][df["Oxbow_fcst"].notnull()]).min(),
         },
@@ -399,14 +403,14 @@ def update_output(selections,table, df_json):
         "Abay_CFS_Error": {
             "header": "<b>Error (cfs)</b>",
             "df_column": "Abay_CFS_Error",
-            "df_vals": (df["Abay_CFS_Error"][df["Abay_CFS_Error"].notnull()]).round(1),
+            "df_vals": (df["Abay_CFS_Error"][df["Abay_CFS_Error"].notnull()]).round(0),
             "color_hi": (df["Abay_CFS_Error"][df["Abay_CFS_Error"].notnull()]).max(),
             "color_low": (df["Abay_CFS_Error"][df["Abay_CFS_Error"].notnull()]).min(),
         },
         "Total_Gen": {
             "header": "<b>RA+MF Gen</b>",
             "df_column": "Total_Gen",
-            "df_vals": (df["RA_MW"][df["RA_MW"].notnull()]+(df["MF_MW"][df["MF_MW"].notnull()])).round(1),
+            "df_vals": (df["RA_MW"][df["RA_MW"].notnull()]+(df["MF_MW"][df["MF_MW"].notnull()])).round(0),
             "color_hi": (df["RA_MW"][df["RA_MW"].notnull()]+(df["MF_MW"][df["MF_MW"].notnull()])).max(),
             "color_low": (df["RA_MW"][df["RA_MW"].notnull()]+(df["MF_MW"][df["MF_MW"].notnull()])).min(),
         },
@@ -441,7 +445,6 @@ def update_output(selections,table, df_json):
     table['data'][0]['cells']['fill']['color'] = cell_fill
     table['data'][0]['header']['values'] = header_vals
     return table
-
 
 
 def conditional_cell_formating(df, dfmin, dfmax):
@@ -714,7 +717,7 @@ def abay_forecast(df, df_pi):
     CCS = False
 
     # The last reading in the df for the float set point
-    float = df_pi["Afterbay_Elevation_Setpoint"].iloc[-1]
+    float_level = df_pi["Afterbay_Elevation_Setpoint"].iloc[-1]
 
     #df_pi.set_index('Timestamp', inplace=True)
     #abay_inital = df_pi["Afterbay_Elevation"].truncate(before=(datetime.now(timezone.utc)-timedelta(hours=24)))
@@ -741,7 +744,7 @@ def abay_forecast(df, df_pi):
     df["RA_MW"] = np.minimum(86, df["MFRA_fcst"] * RAtoMF_ratio)
     df["MF_MW"] = np.minimum(128, df["MFRA_fcst"]-df['RA_MW'])
 
-    # This is so we can do the merge below (we need both df's to have the same column name). The goal is to overwrite
+    # This is so we can do the 88 below (we need both df's to have the same column name). The goal is to overwrite
     # any "forecast" data for Oxbow with observed values. There is no point in keeping forecast values in.
     df_pi_hourly.rename(columns={"Oxbow_Power": "Oxbow_fcst"}, inplace=True)
 
@@ -751,6 +754,9 @@ def abay_forecast(df, df_pi):
 
     # Next, since we already have an RA_MF column, the merge will make a _x and _y. Just fill the original with
     # the new data (and any bad data will be nan) and store all that data as RA_MW.
+    # QUESTION: Why don't we overwrite the forecast flow data with the observed flow data?
+    # ANS: If there is a bias developing in the CNRFC flow forecast, the errors will be captured and an average error
+    #      will be applied to the forecast going forward. In many cases, the CNRFC data will match actual data.
     df["RA_MW"] = df['RA_MW_y'].fillna(df['RA_MW_x'])
     df["MF_MW"] = df['MF_MW_y'].fillna(df['MF_MW_x'])
     df["Oxbow_fcst"] = df['Oxbow_fcst_y'].fillna(df['Oxbow_fcst_x'])
@@ -759,7 +765,7 @@ def abay_forecast(df, df_pi):
     df.drop(['RA_MW_y', 'RA_MW_x', 'MF_MW_y', 'MF_MW_x', 'Oxbow_fcst_x','Oxbow_fcst_y'], axis=1, inplace=True)
 
     # Conversion from MW to cfs ==> CFS @ Oxbow = MW * 163.73 + 83.956
-    df["Oxbow_Outflow"] = (df["Oxbow_fcst"] * 163.73) + 83.956
+    df["Abay_Outflow"] = (df["Oxbow_fcst"] * 163.73) + 83.956
 
     # R5 Valve never changes (at least not in the last 5 years in PI data)
     df["R5_Valve"] = 28
@@ -777,7 +783,7 @@ def abay_forecast(df, df_pi):
     # value would be 83.956 due to the y=mx+b above where y = b when x is zero, we need y to = 0 too).
     df.loc[df['MF_MW'] == 0, 'RA_Inflow'] = 0
     df.loc[df['RA_MW'] == 0, 'MF_Inflow'] = 0
-    df.loc[df['Oxbow_fcst'] == 0, 'Oxbow_Outflow'] = 0
+    df.loc[df['Oxbow_fcst'] == 0, 'Abay_Outflow'] = 0
 
     # It helps to look at the PI Vision screen for this.
     # Ibay In: 1) Inflow from MFPH (the water that's powering MFPH)
@@ -807,7 +813,7 @@ def abay_forecast(df, df_pi):
     #                         R20 = R20_RFC_FCST + SPILL + R5
     #                       SPILL = R4_RFC_Fcst + MAX(0,(MF_GEN_TO_CFS - RA_GEN_TO_CFS)) + R5
     #        THEREFORE:
-    #        Inflow Into Abay = RA_GEN_TO_CFS + R20_RFC_FCST + R4_RFC_fcst + AX(0,(MF_GEN_TO_CFS - RA_GEN_TO_CFS)) + R5
+    #        Inflow Into Abay = RA_GEN_TO_CFS + R20_RFC_FCST + R4_RFC_fcst + MAX(0,(MF_GEN_TO_CFS - RA_GEN_TO_CFS)) + R5
     #
     #        CALCULATION ERRORS:
     #        The error between the forecast and the observed is usually fairly consistent on a 24 hour basis (e.g. in
@@ -834,7 +840,6 @@ def abay_forecast(df, df_pi):
     df["R20_fcst_adjusted"] = df["R20_fcst"] + df["Ibay_Spill"]
 
     df["Abay_Inflow"] = df["RA_Inflow"]+df["R20_fcst_adjusted"]+df["R30_fcst"]
-    df["Abay_Outflow"] = df["Oxbow_Outflow"]
 
     df["Abay_AF_Change"] = (df["Abay_Inflow"]-df["Abay_Outflow"])*cfs_to_afh
 
@@ -858,9 +863,153 @@ def abay_forecast(df, df_pi):
 
     # Change from AF to Elevation
     # y = -1.4663E-6x^2+0.019776718*x+1135.3
-    df["Abay_Elev_Fcst"] = np.minimum(float, (-0.0000014663 *
+    df["Abay_Elev_Fcst"] = np.minimum(float_level, (-0.0000014663 *
                                              (df["Abay_AF_Fcst"] ** 2)+0.0197767158*df["Abay_AF_Fcst"]+1135.3))
+    oxbow_automated(df, df_pi_hourly)
     return df
+
+
+def oxbow_automated(df, df_pi):
+    rafting = True
+    # 1 cfs = 0.0826 acre feet per hour
+    cfs_to_afh = 0.0826448
+    abay_inital_af = df_pi["Abay_AF_Observed"].iloc[0]
+
+    # The last reading in the df for the float set point
+    float_level = df_pi["Afterbay_Elevation_Setpoint"].iloc[-1]
+
+    # Absolute Minimum required by licence
+    df["Abay_Requred_Release_CFS"] = 150
+    if rafting:
+        df.loc[df['GMT'].dt.hour.between(8, 11), 'Abay_Requred_Release_CFS'] = 1000
+
+    # Flow into Abay over next 24 hours:
+    abay_in = (df.loc[df['GMT'].dt.day.between(16, 16), 'Abay_Inflow']).sum() * cfs_to_afh
+    abay_out = (df.loc[df['GMT'].dt.day.between(16, 16), 'Abay_Outflow']).sum() * cfs_to_afh
+
+    day_end_elev = abay_inital_af + (abay_in - abay_out)
+
+    target_elev = float_level - (float_level-1168)/2
+    # Elev to AF -> y=0.6334393556x^2 - 1409.2226152x + 783749
+    target_af = 0.6334393556 * (target_elev ** 2) - 1409.2226152 * target_elev + 783749
+
+    # To keep abay level
+    df["Oxbow_fcst_suggested"] = ((df[["Abay_Inflow","Abay_Requred_Release_CFS"]].max(axis=1)*cfs_to_afh)-7.36)/13.425
+
+    # Give an upper bound to Oxbow Generatioon.
+    df["Oxbow_fcst_suggested"][df["Oxbow_fcst_suggested"] > 5.8] = 5.8
+
+
+    # If the outflow is not high enough to meet the minimum flow requirements, we must increase oxbow to
+    # meet the required flow where Oxbow Required MW = (Required CFS - 83.956) / 163.73
+    # Note: This is bc y = 163.73x + 83.956 where y is CFS and x is MW (so MW = y - 83.956 / 163.73)
+    # df.loc[df['Abay_Outflow'] <= df['Abay_Requred_Release_CFS'],
+    #        'Oxbow_fcst_suggested'] = (df['Abay_Requred_Release_CFS'] - 83.956) / 163.73
+
+    # Conversion from MW to cfs ==> CFS @ Oxbow = MW * 163.73 + 83.956
+    df["Oxbow_Outflow_sug"] = (df["Oxbow_fcst_suggested"] * 163.73) + 83.956
+
+    df["Abay_Outflow_sug"] = df["Oxbow_Outflow_sug"]
+
+    df["Abay_AF_Change_sug"] = (df["Abay_Inflow"] - df["Abay_Outflow_sug"]) * cfs_to_afh
+
+    # Calculate the error by taking the value of the forecast - the value of the observed
+    df["Abay_AF_Change_Error_sug"] = df["Abay_AF_Change_sug"] - df["Abay_AF_Change_Observed"]
+
+    # Convert the AF error to CFS (this will be in case we want to graph the errors).
+    df["Abay_CFS_Error_sug"] = df["Abay_AF_Change_Error_sug"] * (1 / cfs_to_afh)
+
+    # Normally, the errors over a 24 hour period are pretty consistent. So just average the error.
+    cfs_error = df["Abay_CFS_Error_sug"].mean()
+    af_error = df["Abay_AF_Change_Error_sug"].mean()
+
+    # To get the AF elevation forecast, take the initial reading and apply the change. Also add in the error.
+    first_valid = df["Abay_AF_Change_sug"].first_valid_index()
+    for i in range(first_valid, len(df)):
+        if i == first_valid:
+            df.loc[i, "Abay_AF_Fcst_sug"] = abay_inital_af
+        else:
+            df.loc[i, "Abay_AF_Fcst_sug"] = df.loc[i - 1, "Abay_AF_Fcst_sug"] + df.loc[i, "Abay_AF_Change_sug"] - af_error
+
+    # Change from AF to Elevation
+    # y = -1.4663E-6x^2+0.019776718*x+1135.3
+    df["Abay_Elev_Fcst_sug"] = np.minimum(float_level, (-0.0000014663 * (df["Abay_AF_Fcst_sug"] ** 2) + 0.0197767158 * df["Abay_AF_Fcst_sug"] + 1135.3))
+
+    fig = go.Figure()
+    #fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    fig.add_trace(go.Scatter(x=df["GMT"][df["Abay_Elev_Fcst"].notnull()],
+                             y=df["Oxbow_fcst_suggested"][df["Abay_Elev_Fcst"].notnull()], name="Oxbow MW"))
+    fig.add_trace(go.Scatter(x=df["GMT"][df["Abay_Elev_Fcst"].notnull()],
+                             y=df["Abay_Elev_Fcst_sug"][df["Abay_Elev_Fcst"].notnull()], name="Abay_Elev",
+                             yaxis="y2"))
+    fig.add_trace(go.Scatter(x=df["GMT"][df["Abay_Inflow"].notnull()],
+                             y=df["Abay_Inflow"][df["Abay_Elev_Fcst"].notnull()], name="Inflow",
+                             yaxis="y3"),)
+    fig.add_trace(go.Scatter(x=df["GMT"][df["Abay_Inflow"].notnull()],
+                             y=df["Abay_Outflow"][df["Abay_Elev_Fcst"].notnull()], name="Outflow",
+                             yaxis="y3"), )
+
+    fig.update_layout(
+        yaxis=dict(
+            title="Oxbow Gen (MW)",
+            titlefont=dict(
+                color="#1f77b4"
+            ),
+            tickfont=dict(
+                color="#1f77b4"
+            )
+        ),
+        yaxis2=dict(
+        title="yaxis2 title",
+        titlefont=dict(
+            color="#ff7f0e"
+        ),
+        tickfont=dict(
+            color="#ff7f0e"
+        ),
+        anchor="free",
+        overlaying="y",
+        side="left",
+        position=0.15
+        ),
+        yaxis3=dict(
+            title="yaxis3 title",
+            titlefont=dict(
+                color="#d62728"
+            ),
+            tickfont=dict(
+                color="#d62728"
+            ),
+            anchor="x",
+            overlaying="y",
+            side="right"
+        ),
+    )
+    fig.show()
+
+    target_elev = 1174.5
+    # Elev to AF -> y=0.6334393556x^2 - 1409.2226152x + 783749
+    target_af = 0.6334393556*(target_elev**2) - 1409.2226152*target_elev + 783749
+
+    hours_to_target = 6
+    abay_inital_af = df_pi["Abay_AF_Observed"].iloc[0]
+
+    # To keep abay level
+    df["Oxbow_fcst_suggested"] = ((df["Abay_Inflow"]*cfs_to_afh)-7.36)/13.425
+
+
+    # To get to a target.
+    df["Oxbow_fcst_target"] = (((target_af-abay_inital_af)/hours_to_target)-7.361)/13.425
+
+
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df["GMT"], y=df["Oxbow_fcst_target"]))
+    fig.show()
+    # MW per Minute
+    oxbow_ramp_rate = 3.8/90
+    return
 
 
 def drop_numerical_outliers(df, meter, z_thresh):
